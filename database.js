@@ -5,12 +5,10 @@ class Database {
     constructor() {
         this.dbPath = path.join(__dirname, 'database.json');
         this.data = this.carregar();
-        
-        // CÓDIGO DE ADMIN ÚNICO E FIXO - SÓ 1 USUÁRIO PODE USAR
-        this.CODIGO_ADMIN_UNICO = 'NYUX-ADM1-GUIXS23';
-        
         console.log('💾 Banco de dados carregado');
-        console.log('🔐 Código de admin único configurado:', this.CODIGO_ADMIN_UNICO);
+        
+        // Inicializa master key se não existir
+        this.inicializarMasterKey();
     }
 
     carregar() {
@@ -24,18 +22,17 @@ class Database {
         }
         return {
             contas: [],
-            keys: [],
-            keysResgatadas: [],
+            keys: [],           // Keys geradas pelo admin
+            keysResgatadas: [], // Keys que já foram usadas
             clientes: {},
             testesUsados: [],
-            adminUnico: {
-                code: 'NYUX-ADM1-GUIXS23',
-                usado: false,
-                usadoPor: null,
-                dataUso: null,
-                ativo: true // Se false, código está bloqueado permanentemente
+            masterKey: {        // Sistema de master key
+                key: 'NYUX-ADM1-GUIXS23',
+                usada: false,
+                usadaPor: null,
+                dataUso: null
             },
-            adminAtivo: null // Número do admin que foi ativado
+            admins: []          // Lista de admins (além do número configurado)
         };
     }
 
@@ -47,85 +44,98 @@ class Database {
         }
     }
 
-    // ========== SISTEMA DE ADMIN ÚNICO (CÓDIGO FIXO) ==========
+    // ========== SISTEMA DE MASTER KEY (ADMIN ÚNICO) ==========
 
-    // Verificar se código de admin único está disponível
-    verificarAdminCodeDisponivel() {
-        return {
-            disponivel: !this.data.adminUnico.usado && this.data.adminUnico.ativo,
-            usado: this.data.adminUnico.usado,
-            usadoPor: this.data.adminUnico.usadoPor,
-            bloqueado: !this.data.adminUnico.ativo
-        };
+    inicializarMasterKey() {
+        if (!this.data.masterKey) {
+            this.data.masterKey = {
+                key: 'NYUX-ADM1-GUIXS23',
+                usada: false,
+                usadaPor: null,
+                dataUso: null
+            };
+            this.salvar();
+        }
     }
 
-    // Ativar admin com código único (SÓ FUNCIONA 1 VEZ!)
-    ativarAdminUnico(code, numeroUsuario) {
-        const codeUpper = code.toUpperCase().trim();
+    // Resgatar a master key (Uso único!)
+    resgatarMasterKey(key, numeroUsuario, nomeUsuario) {
+        const keyUpper = key.toUpperCase().trim();
         
-        // Verifica se é o código correto
-        if (codeUpper !== this.data.adminUnico.code) {
-            return { 
-                sucesso: false, 
-                erro: 'Código inválido.' 
-            };
+        console.log('🔐 Verificando master key:', keyUpper);
+        console.log('🔐 Status atual:', this.data.masterKey);
+
+        // Verifica se é a key correta
+        if (keyUpper !== this.data.masterKey.key) {
+            return { sucesso: false, erro: 'Key inválida' };
         }
 
-        // Verifica se já foi usado
-        if (this.data.adminUnico.usado) {
-            return { 
-                sucesso: false, 
-                erro: `Este código já foi usado por ${this.data.adminUnico.usadoPor} em ${this.data.adminUnico.dataUso}. Código bloqueado permanentemente.` 
-            };
+        // Verifica se já foi usada
+        if (this.data.masterKey.usada) {
+            return { sucesso: false, erro: 'Esta key já foi usada e está BLOQUEADA permanentemente!' };
         }
 
-        // Verifica se está ativo
-        if (!this.data.adminUnico.ativo) {
-            return { 
-                sucesso: false, 
-                erro: 'Código bloqueado permanentemente.' 
-            };
-        }
+        // Marca como usada
+        const numeroLimpo = numeroUsuario.replace('@s.whatsapp.net', '').split(':')[0];
+        
+        this.data.masterKey.usada = true;
+        this.data.masterKey.usadaPor = {
+            numero: numeroLimpo,
+            nome: nomeUsuario,
+            jid: numeroUsuario
+        };
+        this.data.masterKey.dataUso = new Date().toISOString();
 
-        // ATIVA O ADMIN (SÓ 1 VEZ!)
-        this.data.adminUnico.usado = true;
-        this.data.adminUnico.usadoPor = numeroUsuario;
-        this.data.adminUnico.dataUso = new Date().toISOString();
-        this.data.adminUnico.ativo = false; // BLOQUEIA PERMANENTEMENTE!
-        this.data.adminAtivo = numeroUsuario;
+        // Adiciona à lista de admins permanentes
+        if (!this.data.admins) this.data.admins = [];
+        this.data.admins.push({
+            numero: numeroLimpo,
+            nome: nomeUsuario,
+            tipo: 'master',
+            dataAdicao: new Date().toISOString()
+        });
+
+        // Dá acesso permanente ao usuário
+        if (!this.data.clientes[numeroUsuario]) {
+            this.data.clientes[numeroUsuario] = {
+                numero: numeroLimpo,
+                nome: nomeUsuario,
+                temAcesso: true,
+                acessoPermanente: true,
+                dataRegistro: new Date().toISOString(),
+                usouTeste: false,
+                totalResgatados: 0,
+                keysResgatadas: []
+            };
+        } else {
+            this.data.clientes[numeroUsuario].temAcesso = true;
+            this.data.clientes[numeroUsuario].acessoPermanente = true;
+        }
 
         this.salvar();
 
-        console.log('🔐 ADMIN ATIVADO COM CÓDIGO ÚNICO!');
-        console.log('🔐 Número:', numeroUsuario);
-        console.log('🔐 Código agora está BLOQUEADO permanentemente!');
+        console.log('✅ Master key resgatada com sucesso por:', numeroLimpo);
+        console.log('🔐 Sistema bloqueado. Ninguém mais pode usar esta key.');
 
         return { 
             sucesso: true, 
-            mensagem: '✅ Você agora é o ADMINISTRADOR ÚNICO!\n\n🔒 Este código foi bloqueado permanentemente.\n\n⚠️ Apenas você tem acesso ao painel admin.',
-            numeroAdmin: numeroUsuario
+            mensagem: 'Master key ativada! Você é admin permanente.',
+            admin: true
         };
     }
 
-    // Verificar se é admin (apenas quem ativou o código único)
-    verificarAdmin(numero) {
-        // Remove sufixos do WhatsApp
-        const numeroLimpo = numero
-            .replace('@s.whatsapp.net', '')
-            .replace('@g.us', '')
-            .split(':')[0];
-        
-        return this.data.adminAtivo === numeroLimpo;
+    // Verifica se um número é admin master
+    isAdminMaster(numero) {
+        if (!this.data.admins) return false;
+        const numeroLimpo = numero.replace('@s.whatsapp.net', '').split(':')[0];
+        return this.data.admins.some(admin => admin.numero === numeroLimpo);
     }
 
-    // Verificar se já existe admin ativo
-    existeAdminAtivo() {
-        return this.data.adminUnico.usado && this.data.adminAtivo !== null;
-    }
+    // ========== SISTEMA DE KEYS NORMAIS ==========
 
-    // ========== SISTEMA DE KEYS ==========
-
+    // Criar key (apenas admin)
     criarKey(key, duracao, dias, isTeste = false) {
+        // Verifica se key já existe
         const keyExistente = this.data.keys.find(k => k.key === key);
         if (keyExistente) {
             return { sucesso: false, erro: 'Key já existe no sistema' };
@@ -153,121 +163,189 @@ class Database {
         };
     }
 
+    // Resgatar key normal (apenas se existir, estiver ativa e não usada)
     resgatarKey(key, numeroUsuario, nomeUsuario) {
         const keyUpper = key.toUpperCase().trim();
         
         console.log('🔍 Buscando key:', keyUpper);
+        console.log('🔍 Total de keys no sistema:', this.data.keys.length);
         
+        // Procura a key no banco
         const keyEncontrada = this.data.keys.find(k => k.key === keyUpper);
         
         if (!keyEncontrada) {
-            return { 
-                sucesso: false, 
-                erro: 'Key não encontrada. Verifique se digitou corretamente.' 
-            };
+            console.log('❌ Key não encontrada:', keyUpper);
+            return { sucesso: false, erro: 'Key não encontrada no sistema. Verifique se digitou corretamente ou contate o admin.' };
         }
 
-        if (keyEncontrada.usada) {
-            return { 
-                sucesso: false, 
-                erro: 'Esta key já foi resgatada por outro usuário.' 
-            };
-        }
-
+        // Verifica se está ativa
         if (!keyEncontrada.ativa) {
-            return { 
-                sucesso: false, 
-                erro: 'Esta key foi desativada.' 
-            };
+            console.log('❌ Key inativa:', keyUpper);
+            return { sucesso: false, erro: 'Key está inativa/bloqueada.' };
         }
 
+        // Verifica se já foi usada
+        if (keyEncontrada.usada) {
+            console.log('❌ Key já usada:', keyUpper);
+            return { sucesso: false, erro: `Key já foi usada por outro usuário em ${new Date(keyEncontrada.dataUso).toLocaleString()}. Cada key só pode ser usada uma vez!` };
+        }
+
+        // Verifica se usuário já tem acesso ativo
+        const numeroLimpo = numeroUsuario.replace('@s.whatsapp.net', '').split(':')[0];
         const clienteExistente = this.data.clientes[numeroUsuario];
-        if (clienteExistente && clienteExistente.temAcesso) {
-            return { 
-                sucesso: false, 
-                erro: 'Você já possui uma key ativa.' 
-            };
+        
+        if (clienteExistente && clienteExistente.temAcesso && !clienteExistente.acessoPermanente) {
+            // Se tem acesso não-permanente, verifica se expirou
+            if (clienteExistente.keyInfo && new Date(clienteExistente.keyInfo.expira) > new Date()) {
+                return { sucesso: false, erro: 'Você já tem uma key ativa! Espere expirar antes de resgatar outra.' };
+            }
         }
 
+        // Marca key como usada
         keyEncontrada.usada = true;
-        keyEncontrada.usadaPor = numeroUsuario;
+        keyEncontrada.usadaPor = {
+            numero: numeroLimpo,
+            nome: nomeUsuario,
+            jid: numeroUsuario
+        };
         keyEncontrada.dataUso = new Date().toISOString();
 
-        const dataExpiracao = this.calcularExpiracao(keyEncontrada.dias);
+        // Adiciona às keys resgatadas
+        this.data.keysResgatadas.push({
+            ...keyEncontrada,
+            dataResgate: new Date().toISOString()
+        });
 
+        // Calcula expiração
+        const expira = this.calcularExpiracao(keyEncontrada.dias);
+
+        // Registra cliente
         if (!this.data.clientes[numeroUsuario]) {
             this.data.clientes[numeroUsuario] = {
-                numero: numeroUsuario,
+                numero: numeroLimpo,
                 nome: nomeUsuario,
-                dataCadastro: new Date().toISOString(),
-                totalResgatados: 0
+                temAcesso: true,
+                acessoPermanente: keyEncontrada.dias === 99999, // Lifetime é permanente
+                dataRegistro: new Date().toISOString(),
+                usouTeste: false,
+                totalResgatados: 0,
+                keysResgatadas: []
             };
         }
 
-        this.data.clientes[numeroUsuario] = {
-            ...this.data.clientes[numeroUsuario],
-            temAcesso: true,
-            keyInfo: {
-                key: keyUpper,
-                plano: keyEncontrada.isTeste ? 'Teste' : 'Premium',
-                duracao: keyEncontrada.duracao,
-                expira: dataExpiracao,
-                dataAtivacao: new Date().toISOString()
-            },
-            usouTeste: keyEncontrada.isTeste || this.data.clientes[numeroUsuario].usouTeste
+        this.data.clientes[numeroUsuario].temAcesso = true;
+        this.data.clientes[numeroUsuario].totalResgatados++;
+        this.data.clientes[numeroUsuario].keysResgatadas.push({
+            key: keyUpper,
+            plano: keyEncontrada.duracao,
+            expira: expira,
+            dataResgate: new Date().toISOString()
+        });
+        this.data.clientes[numeroUsuario].keyInfo = {
+            key: keyUpper,
+            plano: keyEncontrada.duracao,
+            expira: expira
         };
 
         this.salvar();
 
-        return {
-            sucesso: true,
-            plano: keyEncontrada.isTeste ? 'Teste Grátis' : 'Premium',
-            duracao: keyEncontrada.duracao,
-            expira: dataExpiracao
-        };
-    }
+        console.log('✅ Key resgatada com sucesso:', keyUpper);
+        console.log('👤 Por:', numeroLimpo);
 
-    criarKeyTeste(key, duracao, horas, numeroUsuario, nomeUsuario) {
-        const dias = horas / 24;
-        return this.criarKey(key, duracao, dias, true);
+        return { 
+            sucesso: true, 
+            plano: keyEncontrada.duracao,
+            duracao: keyEncontrada.duracao,
+            expira: expira
+        };
     }
 
     calcularExpiracao(dias) {
         const data = new Date();
+        if (dias === 99999) {
+            return 'Nunca (Lifetime)';
+        }
         data.setDate(data.getDate() + dias);
-        return data.toLocaleString('pt-BR');
+        return data.toLocaleDateString('pt-BR');
     }
+
+    // ========== OUTROS MÉTODOS ==========
 
     verificarAcesso(numero) {
         const cliente = this.data.clientes[numero];
-        if (!cliente || !cliente.temAcesso) return false;
+        if (!cliente) return false;
+        if (cliente.acessoPermanente) return true;
+        if (!cliente.temAcesso) return false;
         
-        if (cliente.keyInfo && cliente.keyInfo.expira) {
-            const agora = new Date();
-            const expira = new Date(cliente.keyInfo.expira);
-            if (agora > expira) {
+        // Verifica se expirou
+        if (cliente.keyInfo && cliente.keyInfo.expira !== 'Nunca (Lifetime)') {
+            const expira = new Date(cliente.keyInfo.expira.split('/').reverse().join('-'));
+            if (expira < new Date()) {
                 cliente.temAcesso = false;
                 this.salvar();
                 return false;
             }
         }
-        
         return true;
+    }
+
+    getPerfil(numero) {
+        const cliente = this.data.clientes[numero] || {
+            numero: numero.replace('@s.whatsapp.net', '').split(':')[0],
+            temAcesso: false,
+            usouTeste: false,
+            totalResgatados: 0
+        };
+        return cliente;
     }
 
     verificarTesteUsado(numero) {
         return this.data.testesUsados.includes(numero);
     }
 
-    getPerfil(numero) {
-        return this.data.clientes[numero] || {
-            temAcesso: false,
-            usouTeste: false,
-            totalResgatados: 0
-        };
-    }
+    criarKeyTeste(key, duracao, horas, numeroUsuario, nomeUsuario) {
+        // Cria key de teste
+        const resultado = this.criarKey(key, duracao, horas, true);
+        
+        if (resultado.sucesso) {
+            // Marca como usada imediatamente (teste é automático)
+            const keyObj = this.data.keys.find(k => k.key === key);
+            keyObj.usada = true;
+            keyObj.usadaPor = {
+                numero: numeroUsuario.replace('@s.whatsapp.net', '').split(':')[0],
+                nome: nomeUsuario,
+                jid: numeroUsuario
+            };
+            keyObj.dataUso = new Date().toISOString();
 
-    // ========== CONTAS DE JOGOS ==========
+            // Registra cliente de teste
+            if (!this.data.clientes[numeroUsuario]) {
+                this.data.clientes[numeroUsuario] = {
+                    numero: numeroUsuario.replace('@s.whatsapp.net', '').split(':')[0],
+                    nome: nomeUsuario,
+                    temAcesso: true,
+                    acessoPermanente: false,
+                    dataRegistro: new Date().toISOString(),
+                    usouTeste: true,
+                    totalResgatados: 1,
+                    keysResgatadas: [{
+                        key: key,
+                        plano: `Teste ${duracao}`,
+                        expira: this.calcularExpiracao(horas / 24),
+                        dataResgate: new Date().toISOString()
+                    }]
+                };
+            } else {
+                this.data.clientes[numeroUsuario].usouTeste = true;
+                this.data.clientes[numeroUsuario].temAcesso = true;
+            }
+
+            this.data.testesUsados.push(numeroUsuario);
+            this.salvar();
+        }
+
+        return resultado;
+    }
 
     addConta(jogo, categoria, login, senha) {
         this.data.contas.push({
@@ -275,51 +353,39 @@ class Database {
             categoria,
             login,
             senha,
+            disponivel: true,
             dataAdicao: new Date().toISOString()
         });
         this.salvar();
     }
 
     buscarConta(nomeJogo) {
-        const termo = nomeJogo.toLowerCase();
-        return this.data.contas.find(c => c.jogo.toLowerCase().includes(termo));
+        return this.data.contas.find(c => 
+            c.jogo.toLowerCase().includes(nomeJogo.toLowerCase()) && c.disponivel
+        );
     }
 
     getJogosDisponiveisPorCategoria() {
         const categorias = {};
-        this.data.contas.forEach(conta => {
-            if (!categorias[conta.categoria]) {
-                categorias[conta.categoria] = [];
-            }
-            if (!categorias[conta.categoria].find(j => j.jogo === conta.jogo)) {
-                categorias[conta.categoria].push(conta);
-            }
+        this.data.contas.filter(c => c.disponivel).forEach(c => {
+            if (!categorias[c.categoria]) categorias[c.categoria] = [];
+            categorias[c.categoria].push(c);
         });
         return categorias;
     }
 
     getTodosJogosDisponiveis() {
-        return this.data.contas;
+        return this.data.contas.filter(c => c.disponivel);
     }
 
-    // ========== ESTATÍSTICAS ==========
-
     getEstatisticas() {
-        const keysAtivas = this.data.keys.filter(k => k.ativa && !k.usada).length;
-        const keysUsadas = this.data.keys.filter(k => k.usada).length;
-        const keysTeste = this.data.keys.filter(k => k.isTeste).length;
-        
         return {
             totalJogos: this.data.contas.length,
-            disponiveis: this.data.contas.length,
-            usados: 0,
-            keysAtivas,
-            keysUsadas,
-            keysTeste,
+            disponiveis: this.data.contas.filter(c => c.disponivel).length,
+            keysAtivas: this.data.keys.filter(k => k.ativa && !k.usada).length,
+            keysUsadas: this.data.keysResgatadas.length,
             totalClientes: Object.keys(this.data.clientes).length,
-            totalCategorias: Object.keys(this.getJogosDisponiveisPorCategoria()).length,
-            adminAtivo: this.data.adminAtivo || 'Nenhum',
-            adminCodeUsado: this.data.adminUnico.usado
+            masterKeyUsada: this.data.masterKey.usada ? 'SIM (BLOQUEADA)' : 'NÃO (DISPONÍVEL)'
         };
     }
 
@@ -330,30 +396,23 @@ class Database {
     importarTXT(texto) {
         const linhas = texto.split('\n');
         let adicionadas = 0;
-        let erros = 0;
-        const jogosUnicos = new Set();
+        const jogos = new Set();
         const categorias = new Set();
 
-        for (const linha of linhas) {
-            try {
-                const partes = linha.split('|').map(p => p.trim());
-                if (partes.length >= 4) {
-                    const [jogo, categoria, login, senha] = partes;
-                    this.addConta(jogo, categoria, login, senha);
-                    jogosUnicos.add(jogo);
-                    categorias.add(categoria);
-                    adicionadas++;
-                }
-            } catch (err) {
-                erros++;
+        linhas.forEach(linha => {
+            const [jogo, categoria, login, senha] = linha.split('|').map(s => s.trim());
+            if (jogo && categoria && login && senha) {
+                this.addConta(jogo, categoria, login, senha);
+                adicionadas++;
+                jogos.add(jogo);
+                categorias.add(categoria);
             }
-        }
+        });
 
         return {
             adicionadas,
-            jogosUnicos: jogosUnicos.size,
-            categorias: categorias.size,
-            erros
+            jogosUnicos: jogos.size,
+            categorias: categorias.size
         };
     }
 }
