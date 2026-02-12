@@ -5,7 +5,12 @@ class Database {
     constructor() {
         this.dbPath = path.join(__dirname, 'database.json');
         this.data = this.carregar();
+        
+        // CÓDIGO DE ADMIN ÚNICO E FIXO - SÓ 1 USUÁRIO PODE USAR
+        this.CODIGO_ADMIN_UNICO = 'NYUX-ADM1-GUIXS23';
+        
         console.log('💾 Banco de dados carregado');
+        console.log('🔐 Código de admin único configurado:', this.CODIGO_ADMIN_UNICO);
     }
 
     carregar() {
@@ -19,10 +24,18 @@ class Database {
         }
         return {
             contas: [],
-            keys: [], // Keys geradas pelo admin
-            keysResgatadas: [], // Keys que já foram usadas
+            keys: [],
+            keysResgatadas: [],
             clientes: {},
-            testesUsados: []
+            testesUsados: [],
+            adminUnico: {
+                code: 'NYUX-ADM1-GUIXS23',
+                usado: false,
+                usadoPor: null,
+                dataUso: null,
+                ativo: true // Se false, código está bloqueado permanentemente
+            },
+            adminAtivo: null // Número do admin que foi ativado
         };
     }
 
@@ -34,11 +47,85 @@ class Database {
         }
     }
 
-    // ========== SISTEMA DE KEYS CORRIGIDO ==========
+    // ========== SISTEMA DE ADMIN ÚNICO (CÓDIGO FIXO) ==========
 
-    // Criar key (apenas admin)
+    // Verificar se código de admin único está disponível
+    verificarAdminCodeDisponivel() {
+        return {
+            disponivel: !this.data.adminUnico.usado && this.data.adminUnico.ativo,
+            usado: this.data.adminUnico.usado,
+            usadoPor: this.data.adminUnico.usadoPor,
+            bloqueado: !this.data.adminUnico.ativo
+        };
+    }
+
+    // Ativar admin com código único (SÓ FUNCIONA 1 VEZ!)
+    ativarAdminUnico(code, numeroUsuario) {
+        const codeUpper = code.toUpperCase().trim();
+        
+        // Verifica se é o código correto
+        if (codeUpper !== this.data.adminUnico.code) {
+            return { 
+                sucesso: false, 
+                erro: 'Código inválido.' 
+            };
+        }
+
+        // Verifica se já foi usado
+        if (this.data.adminUnico.usado) {
+            return { 
+                sucesso: false, 
+                erro: `Este código já foi usado por ${this.data.adminUnico.usadoPor} em ${this.data.adminUnico.dataUso}. Código bloqueado permanentemente.` 
+            };
+        }
+
+        // Verifica se está ativo
+        if (!this.data.adminUnico.ativo) {
+            return { 
+                sucesso: false, 
+                erro: 'Código bloqueado permanentemente.' 
+            };
+        }
+
+        // ATIVA O ADMIN (SÓ 1 VEZ!)
+        this.data.adminUnico.usado = true;
+        this.data.adminUnico.usadoPor = numeroUsuario;
+        this.data.adminUnico.dataUso = new Date().toISOString();
+        this.data.adminUnico.ativo = false; // BLOQUEIA PERMANENTEMENTE!
+        this.data.adminAtivo = numeroUsuario;
+
+        this.salvar();
+
+        console.log('🔐 ADMIN ATIVADO COM CÓDIGO ÚNICO!');
+        console.log('🔐 Número:', numeroUsuario);
+        console.log('🔐 Código agora está BLOQUEADO permanentemente!');
+
+        return { 
+            sucesso: true, 
+            mensagem: '✅ Você agora é o ADMINISTRADOR ÚNICO!\n\n🔒 Este código foi bloqueado permanentemente.\n\n⚠️ Apenas você tem acesso ao painel admin.',
+            numeroAdmin: numeroUsuario
+        };
+    }
+
+    // Verificar se é admin (apenas quem ativou o código único)
+    verificarAdmin(numero) {
+        // Remove sufixos do WhatsApp
+        const numeroLimpo = numero
+            .replace('@s.whatsapp.net', '')
+            .replace('@g.us', '')
+            .split(':')[0];
+        
+        return this.data.adminAtivo === numeroLimpo;
+    }
+
+    // Verificar se já existe admin ativo
+    existeAdminAtivo() {
+        return this.data.adminUnico.usado && this.data.adminAtivo !== null;
+    }
+
+    // ========== SISTEMA DE KEYS ==========
+
     criarKey(key, duracao, dias, isTeste = false) {
-        // Verifica se key já existe
         const keyExistente = this.data.keys.find(k => k.key === key);
         if (keyExistente) {
             return { sucesso: false, erro: 'Key já existe no sistema' };
@@ -66,60 +153,48 @@ class Database {
         };
     }
 
-    // Resgatar key (apenas se existir, estiver ativa e não usada)
     resgatarKey(key, numeroUsuario, nomeUsuario) {
         const keyUpper = key.toUpperCase().trim();
         
         console.log('🔍 Buscando key:', keyUpper);
-        console.log('🔍 Total de keys no sistema:', this.data.keys.length);
         
-        // Procura a key no banco
         const keyEncontrada = this.data.keys.find(k => k.key === keyUpper);
         
         if (!keyEncontrada) {
-            console.log('❌ Key não encontrada:', keyUpper);
             return { 
                 sucesso: false, 
-                erro: 'Key não encontrada. Verifique se digitou corretamente ou compre uma key válida.' 
+                erro: 'Key não encontrada. Verifique se digitou corretamente.' 
             };
         }
 
-        console.log('✅ Key encontrada:', keyEncontrada);
-
-        // Verifica se já foi usada
         if (keyEncontrada.usada) {
             return { 
                 sucesso: false, 
-                erro: `Esta key já foi resgatada por outro usuário em ${new Date(keyEncontrada.dataUso).toLocaleString()}.` 
+                erro: 'Esta key já foi resgatada por outro usuário.' 
             };
         }
 
-        // Verifica se está ativa
         if (!keyEncontrada.ativa) {
             return { 
                 sucesso: false, 
-                erro: 'Esta key foi desativada pelo administrador.' 
+                erro: 'Esta key foi desativada.' 
             };
         }
 
-        // Verifica se usuário já tem uma key ativa
         const clienteExistente = this.data.clientes[numeroUsuario];
         if (clienteExistente && clienteExistente.temAcesso) {
             return { 
                 sucesso: false, 
-                erro: 'Você já possui uma key ativa. Aguarde expirar para resgatar outra.' 
+                erro: 'Você já possui uma key ativa.' 
             };
         }
 
-        // Marca key como usada
         keyEncontrada.usada = true;
         keyEncontrada.usadaPor = numeroUsuario;
         keyEncontrada.dataUso = new Date().toISOString();
 
-        // Calcula expiração
         const dataExpiracao = this.calcularExpiracao(keyEncontrada.dias);
 
-        // Registra cliente
         if (!this.data.clientes[numeroUsuario]) {
             this.data.clientes[numeroUsuario] = {
                 numero: numeroUsuario,
@@ -152,9 +227,7 @@ class Database {
         };
     }
 
-    // Criar key de teste (válida por horas)
     criarKeyTeste(key, duracao, horas, numeroUsuario, nomeUsuario) {
-        // Converte horas para fração de dia para o cálculo
         const dias = horas / 24;
         return this.criarKey(key, duracao, dias, true);
     }
@@ -169,7 +242,6 @@ class Database {
         const cliente = this.data.clientes[numero];
         if (!cliente || !cliente.temAcesso) return false;
         
-        // Verifica se expirou
         if (cliente.keyInfo && cliente.keyInfo.expira) {
             const agora = new Date();
             const expira = new Date(cliente.keyInfo.expira);
@@ -219,7 +291,6 @@ class Database {
             if (!categorias[conta.categoria]) {
                 categorias[conta.categoria] = [];
             }
-            // Evita duplicatas
             if (!categorias[conta.categoria].find(j => j.jogo === conta.jogo)) {
                 categorias[conta.categoria].push(conta);
             }
@@ -246,15 +317,15 @@ class Database {
             keysUsadas,
             keysTeste,
             totalClientes: Object.keys(this.data.clientes).length,
-            totalCategorias: Object.keys(this.getJogosDisponiveisPorCategoria()).length
+            totalCategorias: Object.keys(this.getJogosDisponiveisPorCategoria()).length,
+            adminAtivo: this.data.adminAtivo || 'Nenhum',
+            adminCodeUsado: this.data.adminUnico.usado
         };
     }
 
     getTodosClientes() {
         return Object.values(this.data.clientes);
     }
-
-    // ========== IMPORTAR ==========
 
     importarTXT(texto) {
         const linhas = texto.split('\n');
@@ -265,7 +336,6 @@ class Database {
 
         for (const linha of linhas) {
             try {
-                // Formato esperado: Jogo | Categoria | Login | Senha
                 const partes = linha.split('|').map(p => p.trim());
                 if (partes.length >= 4) {
                     const [jogo, categoria, login, senha] = partes;
