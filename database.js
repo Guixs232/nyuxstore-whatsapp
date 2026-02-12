@@ -37,7 +37,7 @@ class Database {
     }
 
     // ==========================================
-    // CONTAS STEAM
+    // CONTAS STEAM - CORRIGIDO: ILIMITADO
     // ==========================================
     
     addConta(jogo, categoria, login, senha) {
@@ -48,8 +48,9 @@ class Database {
             login: login,
             senha: senha,
             dataAdicao: new Date().toISOString(),
-            resgatadaPor: null,
-            dataResgate: null
+            // REMOVIDO: resgatadaPor e dataResgate (não precisa mais)
+            totalResgates: 0, // NOVO: conta quantas vezes foi pega
+            historicoResgates: [] // NOVO: quem pegou e quando
         };
         
         this.data.contas.push(conta);
@@ -57,15 +58,20 @@ class Database {
         return conta;
     }
 
+    // CORRIGIDO: Retorna TODAS as contas, não só as não resgatadas
     getTodosJogosDisponiveis() {
-        return this.data.contas.filter(c => !c.resgatadaPor);
+        // Retorna todas as contas, ordenadas por mais recentes primeiro
+        return this.data.contas.sort((a, b) => 
+            new Date(b.dataAdicao) - new Date(a.dataAdicao)
+        );
     }
 
+    // CORRIGIDO: Retorna todas as categorias com todas as contas
     getJogosDisponiveisPorCategoria() {
-        const disponiveis = this.getTodosJogosDisponiveis();
+        const todasContas = this.getTodosJogosDisponiveis();
         const porCategoria = {};
         
-        disponiveis.forEach(conta => {
+        todasContas.forEach(conta => {
             if (!porCategoria[conta.categoria]) {
                 porCategoria[conta.categoria] = [];
             }
@@ -75,14 +81,34 @@ class Database {
         return porCategoria;
     }
 
+    // CORRIGIDO: Busca em todas as contas (não só não resgatadas)
     buscarConta(termo) {
         const termoLower = termo.toLowerCase();
+        // Retorna a primeira conta que encontrar (pode ser qualquer uma)
         return this.data.contas.find(c => 
-            !c.resgatadaPor && (
-                c.jogo.toLowerCase().includes(termoLower) ||
-                c.categoria.toLowerCase().includes(termoLower)
-            )
+            c.jogo.toLowerCase().includes(termoLower) ||
+            c.categoria.toLowerCase().includes(termoLower)
         );
+    }
+
+    // CORRIGIDO: Busca conta específica por ID (para evitar repetir a mesma no histórico)
+    buscarContaPorId(id) {
+        return this.data.contas.find(c => c.id === id);
+    }
+
+    // NOVO: Pega uma conta aleatória do jogo solicitado (evita dar sempre a mesma)
+    buscarContaAleatoria(termo) {
+        const termoLower = termo.toLowerCase();
+        const contasDoJogo = this.data.contas.filter(c => 
+            c.jogo.toLowerCase().includes(termoLower) ||
+            c.categoria.toLowerCase().includes(termoLower)
+        );
+        
+        if (contasDoJogo.length === 0) return null;
+        
+        // Retorna uma conta aleatória do jogo
+        const randomIndex = Math.floor(Math.random() * contasDoJogo.length);
+        return contasDoJogo[randomIndex];
     }
 
     removerConta(jogo, login) {
@@ -122,7 +148,6 @@ class Database {
     }
 
     criarKeyTeste(key, duracao, horas, numero, nome) {
-        // Calcula expiração em horas
         const agora = new Date();
         const expira = new Date(agora.getTime() + (horas * 60 * 60 * 1000));
         
@@ -141,7 +166,6 @@ class Database {
         
         this.data.keys.push(keyData);
         
-        // Registra cliente
         if (!this.data.clientes[numero]) {
             this.data.clientes[numero] = this.criarPerfilPadrao(numero, nome);
         }
@@ -180,7 +204,6 @@ class Database {
             return { sucesso: false, erro: 'Use a opção de teste grátis' };
         }
         
-        // Calcula expiração
         const agora = new Date();
         const expira = new Date(agora.getTime() + (keyData.dias * 24 * 60 * 60 * 1000));
         
@@ -189,7 +212,6 @@ class Database {
         keyData.dataUso = agora.toISOString();
         keyData.dataExpiracao = expira.toISOString();
         
-        // Registra cliente
         if (!this.data.clientes[numero]) {
             this.data.clientes[numero] = this.criarPerfilPadrao(numero, nome);
         }
@@ -197,7 +219,7 @@ class Database {
         const cliente = this.data.clientes[numero];
         cliente.nome = nome;
         cliente.temAcesso = true;
-        cliente.acessoPermanente = keyData.dias > 1000; // Lifetime
+        cliente.acessoPermanente = keyData.dias > 1000;
         cliente.keyInfo = {
             key: key,
             plano: keyData.plano,
@@ -259,16 +281,13 @@ class Database {
         const cliente = this.data.clientes[numero];
         if (!cliente) return false;
         
-        // Se é admin permanente, sempre tem acesso
         if (cliente.acessoPermanente) return true;
         
-        // Se tem keyInfo com data de expiração, verifica
         if (cliente.keyInfo && cliente.keyInfo.dataExpiracao) {
             const agora = new Date();
             const expira = new Date(cliente.keyInfo.dataExpiracao);
             
             if (agora > expira) {
-                // Expirou
                 cliente.temAcesso = false;
                 this.salvarDados();
                 return false;
@@ -286,7 +305,7 @@ class Database {
     }
 
     // ==========================================
-    // PERFIL DO CLIENTE - CORRIGIDO E COMPLETO
+    // PERFIL DO CLIENTE
     // ==========================================
     
     criarPerfilPadrao(numero, nome) {
@@ -300,28 +319,24 @@ class Database {
             isAdmin: false,
             keyInfo: null,
             keysResgatadas: [],
-            jogosResgatados: [], // NOVO: Array de jogos que o usuário pegou
+            jogosResgatados: [],
             totalJogosResgatados: 0
         };
     }
 
     getPerfil(numero) {
-        // Limpa o número (remove @s.whatsapp.net, etc)
         const numLimpo = numero.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
         
         let cliente = this.data.clientes[numero] || this.data.clientes[numLimpo];
         
         if (!cliente) {
-            // Cria perfil temporário para novos usuários
             return this.criarPerfilPadrao(numero, 'Visitante');
         }
         
-        // Garante que tem todos os campos (para compatibilidade com dados antigos)
         if (!cliente.jogosResgatados) cliente.jogosResgatados = [];
         if (!cliente.keysResgatadas) cliente.keysResgatadas = [];
         if (!cliente.dataRegistro) cliente.dataRegistro = new Date().toISOString();
         
-        // Atualiza status de acesso (verifica se expirou)
         if (cliente.keyInfo && cliente.keyInfo.dataExpiracao && !cliente.acessoPermanente) {
             const agora = new Date();
             const expira = new Date(cliente.keyInfo.dataExpiracao);
@@ -331,38 +346,40 @@ class Database {
         return cliente;
     }
 
-    // NOVO: Registra quando usuário resgata um jogo
+    // CORRIGIDO: Agora só registra no histórico do usuário, não marca conta como usada
     registrarJogoResgatado(numero, conta) {
         const numLimpo = numero.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
         const cliente = this.data.clientes[numero] || this.data.clientes[numLimpo];
         
         if (!cliente) return;
         
-        // Adiciona à lista de jogos resgatados
         if (!cliente.jogosResgatados) {
             cliente.jogosResgatados = [];
         }
         
-        // Evita duplicados
-        const jaResgatou = cliente.jogosResgatados.find(j => j.id === conta.id);
-        if (!jaResgatou) {
-            cliente.jogosResgatados.push({
-                id: conta.id,
-                jogo: conta.jogo,
-                categoria: conta.categoria,
-                dataResgate: new Date().toISOString()
+        // Adiciona ao histórico do cliente (pode repetir o mesmo jogo)
+        cliente.jogosResgatados.push({
+            id: conta.id,
+            jogo: conta.jogo,
+            categoria: conta.categoria,
+            login: conta.login, // Salva login/senha no histórico do usuário
+            senha: conta.senha,
+            dataResgate: new Date().toISOString()
+        });
+        
+        cliente.totalJogosResgatados = cliente.jogosResgatados.length;
+        
+        // Atualiza estatísticas da conta (mas não bloqueia)
+        const contaDB = this.data.contas.find(c => c.id === conta.id);
+        if (contaDB) {
+            contaDB.totalResgates = (contaDB.totalResgates || 0) + 1;
+            contaDB.historicoResgates.push({
+                numero: numero,
+                data: new Date().toISOString()
             });
-            cliente.totalJogosResgatados = cliente.jogosResgatados.length;
-            
-            // Marca conta como resgatada
-            const contaDB = this.data.contas.find(c => c.id === conta.id);
-            if (contaDB) {
-                contaDB.resgatadaPor = numero;
-                contaDB.dataResgate = new Date().toISOString();
-            }
-            
-            this.salvarDados();
         }
+        
+        this.salvarDados();
     }
 
     // ==========================================
@@ -371,7 +388,7 @@ class Database {
     
     getEstatisticas() {
         const totalJogos = this.data.contas.length;
-        const disponiveis = this.data.contas.filter(c => !c.resgatadaPor).length;
+        const disponiveis = this.data.contas.length; // Todas estão disponíveis agora
         const keysAtivas = this.data.keys.filter(k => k.usada).length;
         const totalClientes = Object.keys(this.data.clientes).length;
         
@@ -415,7 +432,6 @@ class Database {
             const limpa = linha.trim();
             if (!limpa) continue;
 
-            // Tenta extrair: Jogo | Categoria | Login | Senha
             const partes = limpa.split('|').map(p => p.trim());
             
             if (partes.length >= 4) {
