@@ -1,10 +1,3 @@
-const { 
-    default: makeWASocket, 
-    DisconnectReason, 
-    useMultiFileAuthState,
-    delay,
-    fetchLatestBaileysVersion 
-} = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const Database = require('./database');
@@ -90,6 +83,9 @@ _Digite o número da opção_
 
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
+    // Importa Baileys dinamicamente (ES Module)
+    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
+    
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version, isLatest } = await fetchLatestBaileysVersion();
     
@@ -735,7 +731,7 @@ async function connectToWhatsApp() {
                             text: `📢 *Mensagem da NyuxStore*\n\n${text}\n\n_Digite menu para ver opções_`
                         });
                         enviados++;
-                        await delay(500);
+                        await delay(1000);
                     } catch (e) {
                         console.log('Erro ao enviar para:', cliente.numero);
                     }
