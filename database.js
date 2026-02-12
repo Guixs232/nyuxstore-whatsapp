@@ -1,17 +1,16 @@
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const moment = require('moment');
-const fs = require('fs-extra');
 const path = require('path');
 
 class NyuxDatabase {
     constructor() {
-        this.db = new Database('nyux_whatsapp.db');
+        this.db = new sqlite3.Database('nyux_whatsapp.db');
         this.init();
     }
 
     init() {
         // Tabela de contas
-        this.db.exec(`
+        this.db.run(`
             CREATE TABLE IF NOT EXISTS contas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 jogo TEXT NOT NULL,
@@ -26,7 +25,7 @@ class NyuxDatabase {
         `);
 
         // Tabela de keys
-        this.db.exec(`
+        this.db.run(`
             CREATE TABLE IF NOT EXISTS keys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key_code TEXT UNIQUE NOT NULL,
@@ -41,7 +40,7 @@ class NyuxDatabase {
         `);
 
         // Tabela de clientes
-        this.db.exec(`
+        this.db.run(`
             CREATE TABLE IF NOT EXISTS clientes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 numero TEXT UNIQUE NOT NULL,
@@ -55,7 +54,7 @@ class NyuxDatabase {
         `);
 
         // Tabela de resgates
-        this.db.exec(`
+        this.db.run(`
             CREATE TABLE IF NOT EXISTS resgates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 cliente_numero TEXT,
@@ -70,7 +69,8 @@ class NyuxDatabase {
     // Contas
     addConta(jogo, categoria, login, senha) {
         const stmt = this.db.prepare('INSERT INTO contas (jogo, categoria, login, senha) VALUES (?, ?, ?, ?)');
-        return stmt.run(jogo, categoria, login, senha);
+        stmt.run(jogo, categoria, login, senha);
+        stmt.finalize();
     }
 
     buscarConta(nomeJogo) {
@@ -81,14 +81,17 @@ class NyuxDatabase {
     marcarContaUsada(id, numeroCliente) {
         const stmt = this.db.prepare('UPDATE contas SET status = ?, usado_por = ?, data_usado = ? WHERE id = ?');
         stmt.run('usado', numeroCliente, moment().format('YYYY-MM-DD HH:mm:ss'), id);
+        stmt.finalize();
         
         // Incrementa resgates do cliente
         const upd = this.db.prepare('UPDATE clientes SET total_resgates = total_resgates + 1 WHERE numero = ?');
         upd.run(numeroCliente);
+        upd.finalize();
         
         // Registra resgate
         const ins = this.db.prepare('INSERT INTO resgates (cliente_numero, conta_id) VALUES (?, ?)');
         ins.run(numeroCliente, id);
+        ins.finalize();
     }
 
     getTotalJogos() {
@@ -103,16 +106,12 @@ class NyuxDatabase {
         return resultado;
     }
 
-    getTodosJogos() {
-        const stmt = this.db.prepare('SELECT jogo as nome, categoria, status FROM contas ORDER BY categoria, jogo');
-        return stmt.all();
-    }
-
     // Keys
     criarKey(key, duracao, dias) {
         const expira = moment().add(dias, 'days').format('YYYY-MM-DD HH:mm:ss');
         const stmt = this.db.prepare('INSERT INTO keys (key_code, duracao, dias, expira_em) VALUES (?, ?, ?, ?)');
-        return stmt.run(key, duracao, dias, expira);
+        stmt.run(key, duracao, dias, expira);
+        stmt.finalize();
     }
 
     resgatarKey(key, numeroCliente, nomeCliente) {
@@ -127,6 +126,7 @@ class NyuxDatabase {
         // Marca key como usada
         const updKey = this.db.prepare('UPDATE keys SET usado_por = ?, usado_em = ? WHERE id = ?');
         updKey.run(numeroCliente, moment().format('YYYY-MM-DD HH:mm:ss'), keyData.id);
+        updKey.finalize();
 
         // Atualiza ou cria cliente
         const checkCliente = this.db.prepare('SELECT * FROM clientes WHERE numero = ?');
@@ -135,9 +135,11 @@ class NyuxDatabase {
         if (cliente) {
             const upd = this.db.prepare('UPDATE clientes SET tem_acesso = 1, key_ativa = ?, expira_em = ?, nome = ? WHERE numero = ?');
             upd.run(key, keyData.expira_em, nomeCliente, numeroCliente);
+            upd.finalize();
         } else {
             const ins = this.db.prepare('INSERT INTO clientes (numero, nome, tem_acesso, key_ativa, expira_em) VALUES (?, ?, 1, ?, ?)');
             ins.run(numeroCliente, nomeCliente, key, keyData.expira_em);
+            ins.finalize();
         }
 
         return {
@@ -202,21 +204,16 @@ class NyuxDatabase {
             }
 
             // Detecta login/senha
-            const padroes = [
-                /(?:Login|User|Usuário|Usuario):\s*(\S+).*?(?:Senha|Pass|Password):\s*(\S+)/i,
-                /(?:Login|User|Usuário|Usuario):\s*(\S+)/i
-            ];
-
             let login = null;
             let senha = null;
 
-            // Tenta padrão completo na mesma linha
-            const matchCompleto = linha.match(padroes[0]);
+            // Formato completo na mesma linha
+            const matchCompleto = linha.match(/(?:Login|User|Usuário|Usuario):\s*(\S+).*?(?:Senha|Pass|Password):\s*(\S+)/i);
             if (matchCompleto) {
                 login = matchCompleto[1];
                 senha = matchCompleto[2];
             } else {
-                // Tenta login na linha, senha na próxima
+                // Login na linha, senha na próxima
                 const matchLogin = linha.match(/(?:Login|User|Usuário|Usuario):\s*(\S+)/i);
                 if (matchLogin && i + 1 < linhas.length) {
                     login = matchLogin[1];
