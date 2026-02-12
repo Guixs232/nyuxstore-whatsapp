@@ -1,371 +1,291 @@
-const sqlite3 = require('sqlite3').verbose();
-const moment = require('moment');
+const fs = require('fs');
+const path = require('path');
 
-class NyuxDatabase {
+class Database {
     constructor() {
-        this.db = new sqlite3.Database('nyux_whatsapp.db');
-        this.init();
+        this.dbPath = path.join(__dirname, 'database.json');
+        this.data = this.carregar();
+        console.log('💾 Banco de dados carregado');
     }
 
-    init() {
-        // Tabela de contas
-        this.db.run(`
-            CREATE TABLE IF NOT EXISTS contas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                jogo TEXT NOT NULL,
-                categoria TEXT NOT NULL,
-                login TEXT NOT NULL,
-                senha TEXT NOT NULL,
-                status TEXT DEFAULT 'disponivel',
-                data_add TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                usado_por TEXT,
-                data_usado TIMESTAMP
-            )
-        `);
-
-        // Tabela de keys
-        this.db.run(`
-            CREATE TABLE IF NOT EXISTS keys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key_code TEXT UNIQUE NOT NULL,
-                duracao TEXT NOT NULL,
-                dias INTEGER NOT NULL,
-                is_teste INTEGER DEFAULT 0,
-                criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                usado_por TEXT,
-                usado_em TIMESTAMP,
-                expira_em TIMESTAMP,
-                ativa INTEGER DEFAULT 1
-            )
-        `);
-
-        // Tabela de clientes
-        this.db.run(`
-            CREATE TABLE IF NOT EXISTS clientes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                numero TEXT UNIQUE NOT NULL,
-                nome TEXT,
-                tem_acesso INTEGER DEFAULT 0,
-                key_ativa TEXT,
-                expira_em TIMESTAMP,
-                usou_teste INTEGER DEFAULT 0,
-                total_resgates INTEGER DEFAULT 0,
-                data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        // Tabela de resgates
-        this.db.run(`
-            CREATE TABLE IF NOT EXISTS resgates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cliente_numero TEXT,
-                conta_id INTEGER,
-                data_resgate TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        console.log('✅ Banco de dados inicializado');
-    }
-
-    // Contas
-    addConta(jogo, categoria, login, senha) {
-        const stmt = this.db.prepare('INSERT INTO contas (jogo, categoria, login, senha) VALUES (?, ?, ?, ?)');
-        stmt.run(jogo, categoria, login, senha);
-        stmt.finalize();
-    }
-
-    buscarConta(nomeJogo) {
-        const stmt = this.db.prepare('SELECT * FROM contas WHERE LOWER(jogo) LIKE ? AND status = ? LIMIT 1');
-        return stmt.get(`%${nomeJogo.toLowerCase()}%`, 'disponivel');
-    }
-
-    getContaPorId(id) {
-        const stmt = this.db.prepare('SELECT * FROM contas WHERE id = ?');
-        return stmt.get(id);
-    }
-
-    // Lista de jogos disponíveis (SEM senha) - agrupado por categoria
-    getJogosDisponiveisPorCategoria() {
-        const stmt = this.db.prepare('SELECT categoria, jogo, id FROM contas WHERE status = ? ORDER BY categoria, jogo');
-        const rows = stmt.all('disponivel');
-        
-        const categorias = {};
-        rows.forEach(row => {
-            if (!categorias[row.categoria]) {
-                categorias[row.categoria] = [];
+    carregar() {
+        try {
+            if (fs.existsSync(this.dbPath)) {
+                const data = fs.readFileSync(this.dbPath, 'utf8');
+                return JSON.parse(data);
             }
-            categorias[row.categoria].push({
-                id: row.id,
-                jogo: row.jogo
-            });
-        });
-        
-        return categorias;
+        } catch (err) {
+            console.error('Erro ao carregar DB:', err);
+        }
+        return {
+            contas: [],
+            keys: [], // Keys geradas pelo admin
+            keysResgatadas: [], // Keys que já foram usadas
+            clientes: {},
+            testesUsados: []
+        };
     }
 
-    // Lista simples de jogos para busca
-    getTodosJogosDisponiveis() {
-        const stmt = this.db.prepare('SELECT id, jogo, categoria FROM contas WHERE status = ? ORDER BY categoria, jogo');
-        return stmt.all('disponivel');
+    salvar() {
+        try {
+            fs.writeFileSync(this.dbPath, JSON.stringify(this.data, null, 2));
+        } catch (err) {
+            console.error('Erro ao salvar DB:', err);
+        }
     }
 
-    getTotalJogos() {
-        return this.db.prepare('SELECT COUNT(*) as total FROM contas').get().total;
-    }
+    // ========== SISTEMA DE KEYS CORRIGIDO ==========
 
-    getTotalDisponiveis() {
-        return this.db.prepare('SELECT COUNT(*) as total FROM contas WHERE status = ?').get('disponivel').total;
-    }
-
-    getCategoriasResumo() {
-        const stmt = this.db.prepare('SELECT categoria, COUNT(*) as total FROM contas WHERE status = ? GROUP BY categoria');
-        const rows = stmt.all('disponivel');
-        const resultado = {};
-        rows.forEach(row => resultado[row.categoria] = row.total);
-        return resultado;
-    }
-
-    // Keys normais
+    // Criar key (apenas admin)
     criarKey(key, duracao, dias, isTeste = false) {
-        const expira = moment().add(dias, 'days').format('YYYY-MM-DD HH:mm:ss');
-        const stmt = this.db.prepare('INSERT INTO keys (key_code, duracao, dias, is_teste, expira_em) VALUES (?, ?, ?, ?, ?)');
-        stmt.run(key, duracao, dias, isTeste ? 1 : 0, expira);
-        stmt.finalize();
-    }
-
-    // Key teste - verifica se já usou
-    verificarTesteUsado(numero) {
-        const stmt = this.db.prepare('SELECT usou_teste FROM clientes WHERE numero = ?');
-        const cliente = stmt.get(numero);
-        return cliente && cliente.usou_teste === 1;
-    }
-
-    // Criar key teste e ativar para o usuário
-    criarKeyTeste(key, duracao, horas, numero, nome) {
-        // Verifica se já usou teste
-        if (this.verificarTesteUsado(numero)) {
-            return { sucesso: false, erro: 'Você já utilizou seu teste grátis.' };
+        // Verifica se key já existe
+        const keyExistente = this.data.keys.find(k => k.key === key);
+        if (keyExistente) {
+            return { sucesso: false, erro: 'Key já existe no sistema' };
         }
 
-        const expira = moment().add(horas, 'hours').format('YYYY-MM-DD HH:mm:ss');
+        const novaKey = {
+            key: key,
+            duracao: duracao,
+            dias: dias,
+            isTeste: isTeste,
+            ativa: true,
+            usada: false,
+            usadaPor: null,
+            dataCriacao: new Date().toISOString(),
+            dataUso: null
+        };
+
+        this.data.keys.push(novaKey);
+        this.salvar();
         
-        // Insere a key
-        const stmt = this.db.prepare('INSERT INTO keys (key_code, duracao, dias, is_teste, expira_em, usado_por, usado_em) VALUES (?, ?, ?, ?, ?, ?, ?)');
-        stmt.run(key, duracao, horas, 1, expira, numero, moment().format('YYYY-MM-DD HH:mm:ss'));
-        stmt.finalize();
-
-        // Atualiza ou cria cliente com teste usado
-        const checkCliente = this.db.prepare('SELECT * FROM clientes WHERE numero = ?');
-        const cliente = checkCliente.get(numero);
-
-        if (cliente) {
-            const upd = this.db.prepare('UPDATE clientes SET tem_acesso = 1, key_ativa = ?, expira_em = ?, nome = ?, usou_teste = 1 WHERE numero = ?');
-            upd.run(key, expira, nome, numero);
-            upd.finalize();
-        } else {
-            const ins = this.db.prepare('INSERT INTO clientes (numero, nome, tem_acesso, key_ativa, expira_em, usou_teste) VALUES (?, ?, 1, ?, ?, 1)');
-            ins.run(numero, nome, key, expira);
-            ins.finalize();
-        }
-
-        return {
-            sucesso: true,
-            expira: moment(expira).format('DD/MM/YYYY HH:mm')
+        return { 
+            sucesso: true, 
+            key: key,
+            expira: this.calcularExpiracao(dias)
         };
     }
 
-    resgatarKey(key, numeroCliente, nomeCliente) {
-        const check = this.db.prepare('SELECT * FROM keys WHERE key_code = ? AND ativa = 1 AND usado_por IS NULL');
-        const keyData = check.get(key);
-
-        if (!keyData) {
-            return { sucesso: false, erro: 'Key não encontrada ou já utilizada.' };
+    // Resgatar key (apenas se existir, estiver ativa e não usada)
+    resgatarKey(key, numeroUsuario, nomeUsuario) {
+        const keyUpper = key.toUpperCase().trim();
+        
+        console.log('🔍 Buscando key:', keyUpper);
+        console.log('🔍 Total de keys no sistema:', this.data.keys.length);
+        
+        // Procura a key no banco
+        const keyEncontrada = this.data.keys.find(k => k.key === keyUpper);
+        
+        if (!keyEncontrada) {
+            console.log('❌ Key não encontrada:', keyUpper);
+            return { 
+                sucesso: false, 
+                erro: 'Key não encontrada. Verifique se digitou corretamente ou compre uma key válida.' 
+            };
         }
 
-        const updKey = this.db.prepare('UPDATE keys SET usado_por = ?, usado_em = ? WHERE id = ?');
-        updKey.run(numeroCliente, moment().format('YYYY-MM-DD HH:mm:ss'), keyData.id);
-        updKey.finalize();
+        console.log('✅ Key encontrada:', keyEncontrada);
 
-        const checkCliente = this.db.prepare('SELECT * FROM clientes WHERE numero = ?');
-        const cliente = checkCliente.get(numeroCliente);
-
-        if (cliente) {
-            const upd = this.db.prepare('UPDATE clientes SET tem_acesso = 1, key_ativa = ?, expira_em = ?, nome = ? WHERE numero = ?');
-            upd.run(key, keyData.expira_em, nomeCliente, numeroCliente);
-            upd.finalize();
-        } else {
-            const ins = this.db.prepare('INSERT INTO clientes (numero, nome, tem_acesso, key_ativa, expira_em) VALUES (?, ?, 1, ?, ?)');
-            ins.run(numeroCliente, nomeCliente, key, keyData.expira_em);
-            ins.finalize();
+        // Verifica se já foi usada
+        if (keyEncontrada.usada) {
+            return { 
+                sucesso: false, 
+                erro: `Esta key já foi resgatada por outro usuário em ${new Date(keyEncontrada.dataUso).toLocaleString()}.` 
+            };
         }
+
+        // Verifica se está ativa
+        if (!keyEncontrada.ativa) {
+            return { 
+                sucesso: false, 
+                erro: 'Esta key foi desativada pelo administrador.' 
+            };
+        }
+
+        // Verifica se usuário já tem uma key ativa
+        const clienteExistente = this.data.clientes[numeroUsuario];
+        if (clienteExistente && clienteExistente.temAcesso) {
+            return { 
+                sucesso: false, 
+                erro: 'Você já possui uma key ativa. Aguarde expirar para resgatar outra.' 
+            };
+        }
+
+        // Marca key como usada
+        keyEncontrada.usada = true;
+        keyEncontrada.usadaPor = numeroUsuario;
+        keyEncontrada.dataUso = new Date().toISOString();
+
+        // Calcula expiração
+        const dataExpiracao = this.calcularExpiracao(keyEncontrada.dias);
+
+        // Registra cliente
+        if (!this.data.clientes[numeroUsuario]) {
+            this.data.clientes[numeroUsuario] = {
+                numero: numeroUsuario,
+                nome: nomeUsuario,
+                dataCadastro: new Date().toISOString(),
+                totalResgatados: 0
+            };
+        }
+
+        this.data.clientes[numeroUsuario] = {
+            ...this.data.clientes[numeroUsuario],
+            temAcesso: true,
+            keyInfo: {
+                key: keyUpper,
+                plano: keyEncontrada.isTeste ? 'Teste' : 'Premium',
+                duracao: keyEncontrada.duracao,
+                expira: dataExpiracao,
+                dataAtivacao: new Date().toISOString()
+            },
+            usouTeste: keyEncontrada.isTeste || this.data.clientes[numeroUsuario].usouTeste
+        };
+
+        this.salvar();
 
         return {
             sucesso: true,
-            plano: keyData.duracao,
-            duracao: keyData.duracao,
-            expira: moment(keyData.expira_em).format('DD/MM/YYYY')
+            plano: keyEncontrada.isTeste ? 'Teste Grátis' : 'Premium',
+            duracao: keyEncontrada.duracao,
+            expira: dataExpiracao
         };
+    }
+
+    // Criar key de teste (válida por horas)
+    criarKeyTeste(key, duracao, horas, numeroUsuario, nomeUsuario) {
+        // Converte horas para fração de dia para o cálculo
+        const dias = horas / 24;
+        return this.criarKey(key, duracao, dias, true);
+    }
+
+    calcularExpiracao(dias) {
+        const data = new Date();
+        data.setDate(data.getDate() + dias);
+        return data.toLocaleString('pt-BR');
     }
 
     verificarAcesso(numero) {
-        const stmt = this.db.prepare('SELECT * FROM clientes WHERE numero = ? AND tem_acesso = 1 AND (expira_em > ? OR expira_em IS NULL)');
-        const cliente = stmt.get(numero, moment().format('YYYY-MM-DD HH:mm:ss'));
+        const cliente = this.data.clientes[numero];
+        if (!cliente || !cliente.temAcesso) return false;
         
-        if (!cliente) {
-            const checkKey = this.db.prepare('SELECT * FROM keys WHERE usado_por = ? AND ativa = 1 AND (expira_em > ? OR duracao = ?)');
-            const key = checkKey.get(numero, moment().format('YYYY-MM-DD HH:mm:ss'), 'Lifetime');
-            return !!key;
+        // Verifica se expirou
+        if (cliente.keyInfo && cliente.keyInfo.expira) {
+            const agora = new Date();
+            const expira = new Date(cliente.keyInfo.expira);
+            if (agora > expira) {
+                cliente.temAcesso = false;
+                this.salvar();
+                return false;
+            }
         }
         
         return true;
     }
 
+    verificarTesteUsado(numero) {
+        return this.data.testesUsados.includes(numero);
+    }
+
     getPerfil(numero) {
-        const stmt = this.db.prepare('SELECT * FROM clientes WHERE numero = ?');
-        const cliente = stmt.get(numero) || { tem_acesso: 0, total_resgates: 0, usou_teste: 0 };
-        
-        const keyStmt = this.db.prepare('SELECT * FROM keys WHERE usado_por = ? AND ativa = 1 ORDER BY usado_em DESC LIMIT 1');
-        const keyInfo = keyStmt.get(numero);
-        
-        return {
-            temAcesso: cliente.tem_acesso === 1,
-            totalResgatados: cliente.total_resgates || 0,
-            usouTeste: cliente.usou_teste === 1,
-            keyInfo: keyInfo ? {
-                key: keyInfo.key_code,
-                expira: moment(keyInfo.expira_em).format('DD/MM/YYYY HH:mm'),
-                tipo: keyInfo.is_teste === 1 ? 'Teste' : 'Normal'
-            } : null
+        return this.data.clientes[numero] || {
+            temAcesso: false,
+            usouTeste: false,
+            totalResgatados: 0
         };
     }
 
-    // Importação do arquivo
-    importarTXT(texto) {
-        const linhas = texto.split('\n');
-        let jogoAtual = 'Desconhecido';
-        let categoriaAtual = 'Geral';
-        let adicionadas = 0;
-        let erros = 0;
-        const jogosVistos = new Set();
+    // ========== CONTAS DE JOGOS ==========
+
+    addConta(jogo, categoria, login, senha) {
+        this.data.contas.push({
+            jogo,
+            categoria,
+            login,
+            senha,
+            dataAdicao: new Date().toISOString()
+        });
+        this.salvar();
+    }
+
+    buscarConta(nomeJogo) {
+        const termo = nomeJogo.toLowerCase();
+        return this.data.contas.find(c => c.jogo.toLowerCase().includes(termo));
+    }
+
+    getJogosDisponiveisPorCategoria() {
         const categorias = {};
-
-        for (let i = 0; i < linhas.length; i++) {
-            const linha = linhas[i];
-
-            // Detecta jogo
-            if (linha.includes('🎮') || linha.includes('Jogo:') || linha.includes('Games:') || linha.includes('Game:')) {
-                const match = linha.match(/(?:🎮|Jogo:|Games:|Game:)\s*(.+)/i);
-                if (match) {
-                    jogoAtual = match[1].trim();
-                    categoriaAtual = this.detectarCategoria(jogoAtual);
-                    jogosVistos.add(jogoAtual);
-                }
-                continue;
+        this.data.contas.forEach(conta => {
+            if (!categorias[conta.categoria]) {
+                categorias[conta.categoria] = [];
             }
-
-            // Detecta login/senha - múltiplos formatos
-            let login = null;
-            let senha = null;
-
-            // Formato: User: xxx / Segurança: xxx
-            const matchUser = linha.match(/(?:User|Usuário|Usuario|Login):\s*(\S+)/i);
-            const matchSenha = linha.match(/(?:Segurança|Senha|Pass|Password):\s*(\S+)/i);
-            
-            if (matchUser && matchSenha) {
-                login = matchUser[1];
-                senha = matchSenha[1];
-            } else if (matchUser && i + 1 < linhas.length) {
-                // Senha na próxima linha
-                login = matchUser[1];
-                const matchSenhaProx = linhas[i + 1].match(/(?:Segurança|Senha|Pass|Password):\s*(\S+)/i);
-                if (matchSenhaProx) {
-                    senha = matchSenhaProx[1];
-                    i++;
-                }
+            // Evita duplicatas
+            if (!categorias[conta.categoria].find(j => j.jogo === conta.jogo)) {
+                categorias[conta.categoria].push(conta);
             }
-
-            if (login && senha && login.length > 2 && senha.length > 2) {
-                try {
-                    this.addConta(jogoAtual, categoriaAtual, login, senha);
-                    adicionadas++;
-                    categorias[categoriaAtual] = (categorias[categoriaAtual] || 0) + 1;
-                } catch (e) {
-                    erros++;
-                }
-            }
-        }
-
-        const resumoCats = Object.entries(categorias)
-            .sort((a, b) => b[1] - a[1])
-            .map(([cat, total]) => `• ${cat}: ${total}`)
-            .join('\n');
-
-        return {
-            adicionadas,
-            erros,
-            jogosUnicos: jogosVistos.size,
-            categorias: Object.keys(categorias).length,
-            resumoCategorias: resumoCats || 'Nenhuma categoria'
-        };
+        });
+        return categorias;
     }
 
-    detectarCategoria(nomeJogo) {
-        const jogo = nomeJogo.toLowerCase();
-        
-        if (/assassin|creed/.test(jogo)) return '🗡️ Assassin\'s Creed';
-        if (/call of duty|cod|modern warfare|black ops|warfare/.test(jogo)) return '🔫 Call of Duty';
-        if (/resident evil|re2|re3|re4|re5|re6|re7|re8|biohazard/.test(jogo)) return '🧟 Resident Evil';
-        if (/fifa|fc 24|fc 25|pes|efootball|nba|nfl|ufc|wwe/.test(jogo)) return '⚽ Esportes';
-        if (/forza|need for speed|nfs|grid|f1|dirt|rally|assetto|beamng|euro truck|american truck/.test(jogo)) return '🏎️ Corrida';
-        if (/gta|grand theft|red dead|rdr2/.test(jogo)) return '🚗 Rockstar Games';
-        if (/lego|marvel|avengers|spider|batman|superman/.test(jogo)) return '🦸 Super-Heróis';
-        if (/elden|dark souls|sekiro|bloodborne|demon souls/.test(jogo)) return '⚔️ Soulslike';
-        if (/witcher|cyberpunk|cd projekt/.test(jogo)) return '🐺 CD Projekt Red';
-        if (/farming|simulator|tycoon|manager|city skylines/.test(jogo)) return '🚜 Simuladores';
-        if (/horror|terror|fear|evil|dead|dying light|outlast/.test(jogo)) return '👻 Terror';
-        if (/rpg|final fantasy|dragon age|mass effect|persona/.test(jogo)) return '🎲 RPG';
-        if (/mortal kombat|tekken|street fighter|fighting|smash/.test(jogo)) return '🥊 Luta';
-        if (/hitman|stealth|thief/.test(jogo)) return '🕵️ Stealth';
-        if (/strategy|age of empires|civilization|total war|xcom/.test(jogo)) return '🧠 Estratégia';
-        if (/ark|survival|rust|dayz|forest|sons of the forest|green hell/.test(jogo)) return '🌲 Survival';
-        if (/mario|zelda|nintendo|switch|pokemon/.test(jogo)) return '🍄 Nintendo';
-        if (/sonic|sega|atlus|persona/.test(jogo)) return '💙 Sega';
-        if (/war|battlefield|squad|arma|insurgency|tactical/.test(jogo)) return '💣 Guerra';
-        
-        return '🎮 Ação/Aventura';
+    getTodosJogosDisponiveis() {
+        return this.data.contas;
     }
 
-    // Estatísticas
+    // ========== ESTATÍSTICAS ==========
+
     getEstatisticas() {
-        const totalJogos = this.db.prepare('SELECT COUNT(*) as c FROM contas').get().c;
-        const disponiveis = this.db.prepare('SELECT COUNT(*) as c FROM contas WHERE status = ?').get('disponivel').c;
-        const usados = this.db.prepare('SELECT COUNT(*) as c FROM contas WHERE status = ?').get('usado').c;
-        const keysAtivas = this.db.prepare('SELECT COUNT(*) as c FROM keys WHERE ativa = 1 AND is_teste = 0').get().c;
-        const keysTeste = this.db.prepare('SELECT COUNT(*) as c FROM keys WHERE ativa = 1 AND is_teste = 1').get().c;
-        const totalClientes = this.db.prepare('SELECT COUNT(*) as c FROM clientes').get().c;
-        const totalCategorias = this.db.prepare('SELECT COUNT(DISTINCT categoria) as c FROM contas').get().c;
-
+        const keysAtivas = this.data.keys.filter(k => k.ativa && !k.usada).length;
+        const keysUsadas = this.data.keys.filter(k => k.usada).length;
+        const keysTeste = this.data.keys.filter(k => k.isTeste).length;
+        
         return {
-            totalJogos,
-            disponiveis,
-            usados,
+            totalJogos: this.data.contas.length,
+            disponiveis: this.data.contas.length,
+            usados: 0,
             keysAtivas,
+            keysUsadas,
             keysTeste,
-            totalClientes,
-            totalCategorias
+            totalClientes: Object.keys(this.data.clientes).length,
+            totalCategorias: Object.keys(this.getJogosDisponiveisPorCategoria()).length
         };
     }
 
     getTodosClientes() {
-        return this.db.prepare('SELECT numero FROM clientes WHERE tem_acesso = 1').all();
+        return Object.values(this.data.clientes);
     }
 
-    // Limpar todas as contas (para reimportar)
-    limparContas() {
-        this.db.run('DELETE FROM contas');
-        this.db.run('DELETE FROM resgates');
-        this.db.run("UPDATE contas SET status = 'disponivel', usado_por = NULL, data_usado = NULL");
+    // ========== IMPORTAR ==========
+
+    importarTXT(texto) {
+        const linhas = texto.split('\n');
+        let adicionadas = 0;
+        let erros = 0;
+        const jogosUnicos = new Set();
+        const categorias = new Set();
+
+        for (const linha of linhas) {
+            try {
+                // Formato esperado: Jogo | Categoria | Login | Senha
+                const partes = linha.split('|').map(p => p.trim());
+                if (partes.length >= 4) {
+                    const [jogo, categoria, login, senha] = partes;
+                    this.addConta(jogo, categoria, login, senha);
+                    jogosUnicos.add(jogo);
+                    categorias.add(categoria);
+                    adicionadas++;
+                }
+            } catch (err) {
+                erros++;
+            }
+        }
+
+        return {
+            adicionadas,
+            jogosUnicos: jogosUnicos.size,
+            categorias: categorias.size,
+            erros
+        };
     }
 }
 
-module.exports = NyuxDatabase;
+module.exports = Database;
