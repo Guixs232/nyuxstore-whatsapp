@@ -5,15 +5,19 @@ const http = require('http');
 const Database = require('./database');
 const moment = require('moment');
 
-// Configurações - ADMIN VIA VARIÁVEL DE AMBIENTE
+// Configurações - ADMIN via variável de ambiente OU código
 const BOT_NUMBER = process.env.BOT_NUMBER || '556183040115';
-const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '5518997972598'; // Pega do Railway ou usa padrão
+const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '5518997972598';
 const STORE_NAME = process.env.STORE_NAME || 'NyuxStore';
 const PORT = process.env.PORT || 8080;
+
+// KEY DE ADMIN ESPECIAL (Uso Único!)
+const ADMIN_MASTER_KEY = 'NYUX-ADM1-GUIXS23';
 
 console.log('🔧 Configurações carregadas:');
 console.log('👑 Admin:', ADMIN_NUMBER);
 console.log('🤖 Bot:', BOT_NUMBER);
+console.log('🔐 Master Key:', ADMIN_MASTER_KEY);
 
 const db = new Database();
 const userStates = new Map();
@@ -247,14 +251,18 @@ async function atualizarQRCode(qr) {
     }
 }
 
-// Função para verificar se é admin
+// Função para verificar se é admin (número configurado OU master key usada)
 function verificarAdmin(sender) {
     const numeroLimpo = sender
         .replace('@s.whatsapp.net', '')
         .replace('@g.us', '')
         .split(':')[0];
     
-    return numeroLimpo === ADMIN_NUMBER;
+    // Verifica se é o número admin configurado
+    if (numeroLimpo === ADMIN_NUMBER) return true;
+    
+    // Verifica se este usuário resgatou a master key
+    return db.isAdminMaster(numeroLimpo);
 }
 
 // Menus
@@ -503,7 +511,7 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +${ADMIN_NUMBER}` });
                 } else if (text === '2') {
                     userStates.set(sender, { step: 'resgatar_key' });
-                    await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
+                    await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_\n\n🔐 *Key de Admin disponível!*\nUse: *NYUX-ADM1-GUIXS23* (1 uso apenas!)' });
                 } else if (text === '3') {
                     if (!db.verificarAcesso(sender)) {
                         await sock.sendMessage(sender, { text: '❌ Precisa de key! Digite 2 ou 6' });
@@ -530,7 +538,7 @@ async function connectToWhatsApp() {
                     let total = 0;
                     for (const [cat, lista] of Object.entries(jogos)) {
                         msg += `${cat} (${lista.length})\n`;
-                        lista.forEach((j, i) => msg += `  ${i + 1}. ${j.jogo}\n`);
+                        lista.forEach((j, i) => msg += `   ${i + 1}. ${j.jogo}\n`);
                         total += lista.length;
                     }
                     msg += `\n🎮 Total: ${total}`;
@@ -554,13 +562,37 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
-            // RESGATAR KEY - CORRIGIDO!
+            // RESGATAR KEY - CORRIGIDO COM MASTER KEY!
             else if (userState.step === 'resgatar_key') {
                 const key = text.toUpperCase().replace(/\s/g, '');
                 
                 console.log('🔑 Tentativa de resgatar key:', key);
                 
-                // Valida formato da key
+                // Verifica se é a MASTER KEY DE ADMIN (Uso único!)
+                if (key === ADMIN_MASTER_KEY) {
+                    console.log('🚨 MASTER KEY DETECTADA!');
+                    
+                    const resultado = db.resgatarMasterKey(key, sender, pushName);
+                    
+                    if (resultado.sucesso) {
+                        userStates.set(sender, { step: 'menu' });
+                        await sock.sendMessage(sender, { 
+                            text: `👑 *MASTER KEY ATIVADA!*\n\n🎉 Parabéns ${pushName}!\nVocê agora é um ADMINISTRADOR PERMANENTE!\n\n⚠️ Esta key foi bloqueada permanentemente.\nNinguém mais poderá usá-la.\n\n🔧 Acesse o painel admin digitando: *admin*` 
+                        });
+                        
+                        // Notifica o admin original
+                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                            text: `🚨 *ALERTA: MASTER KEY USADA!*\n\n👤 Usuário: ${pushName}\n📱 Número: ${sender.replace('@s.whatsapp.net', '').split(':')[0]}\n🔐 Key: ${key}\n⏰ Data: ${new Date().toLocaleString()}\n\n✅ Este usuário agora tem acesso de admin!`
+                        });
+                    } else {
+                        await sock.sendMessage(sender, { 
+                            text: `❌ *${resultado.erro}*\n\nEsta key já foi usada ou está bloqueada.` 
+                        });
+                    }
+                    return;
+                }
+                
+                // Valida formato de key normal
                 if (!key.match(/^NYUX-[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
                     await sock.sendMessage(sender, { 
                         text: '❌ *Formato inválido!*\n\nA key deve estar no formato:\n*NYUX-XXXX-XXXX*\n\n_Tente novamente ou digite *menu* para cancelar._' 
@@ -568,7 +600,7 @@ async function connectToWhatsApp() {
                     return;
                 }
                 
-                // Tenta resgatar a key
+                // Tenta resgatar key normal
                 const resultado = db.resgatarKey(key, sender, pushName);
                 
                 if (resultado.sucesso) {
@@ -577,7 +609,6 @@ async function connectToWhatsApp() {
                         text: `✅ *Key Resgatada com Sucesso!*\n\n🎆 Plano: ${resultado.plano}\n⏱️ Duração: ${resultado.duracao}\n📅 Expira em: ${resultado.expira}\n\n🎮 Agora você tem acesso a todos os jogos!\n\n_Digite *menu* para ver as opções._` 
                     });
                 } else {
-                    // Mostra erro específico
                     await sock.sendMessage(sender, { 
                         text: `❌ *Erro ao resgatar key*\n\n${resultado.erro}\n\n_Tente novamente ou digite *menu* para cancelar._` 
                     });
