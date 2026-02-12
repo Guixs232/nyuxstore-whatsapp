@@ -27,6 +27,7 @@ let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
 let tentativasConexao = 0;
+let qrCodeRaw = null; // Guarda o QR code em texto puro
 
 setInterval(() => {
     mensagensProcessadas.clear();
@@ -39,6 +40,7 @@ const server = http.createServer((req, res) => {
     
     const url = req.url;
 
+    // API STATUS
     if (url === '/api/status') {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({
@@ -46,6 +48,17 @@ const server = http.createServer((req, res) => {
             temQR: !!qrCodeDataURL,
             timestamp: new Date().toISOString()
         }));
+        return;
+    }
+
+    // FORÇAR QR CODE - endpoint especial
+    if (url === '/forceqr') {
+        res.setHeader('Content-Type', 'text/plain');
+        if (qrCodeRaw) {
+            res.end(qrCodeRaw);
+        } else {
+            res.end('QR Code ainda não gerado. Aguarde...');
+        }
         return;
     }
 
@@ -64,7 +77,7 @@ const server = http.createServer((req, res) => {
             <head>
                 <title>${STORE_NAME} - Bot WhatsApp</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
-                <meta http-equiv="refresh" content="5">
+                <meta http-equiv="refresh" content="3">
                 <style>
                     body { 
                         font-family: Arial, sans-serif; 
@@ -110,6 +123,19 @@ const server = http.createServer((req, res) => {
                         margin: 20px auto;
                         max-width: 600px;
                     }
+                    .qr-text {
+                        background: #000;
+                        color: #0f0;
+                        padding: 20px;
+                        border-radius: 10px;
+                        font-family: monospace;
+                        font-size: 12px;
+                        max-width: 500px;
+                        margin: 20px auto;
+                        word-break: break-all;
+                        max-height: 300px;
+                        overflow: auto;
+                    }
                 </style>
             </head>
             <body>
@@ -117,12 +143,15 @@ const server = http.createServer((req, res) => {
                 <div class="status ${botConectado ? 'online' : (qrCodeDataURL ? 'waiting' : 'offline')}">
                     ${botConectado ? '✅ Bot Conectado!' : (qrCodeDataURL ? '📱 QR Code Pronto!' : '⏳ Aguardando QR Code...')}
                 </div>
-                ${!botConectado && qrCodeDataURL ? `<a href="/qr" class="btn">📱 Escanear QR Code</a>` : ''}
+                ${!botConectado && qrCodeDataURL ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : ''}
+                ${!botConectado && !qrCodeDataURL ? `<p style="color: #aaa;">Tentativa: ${tentativasConexao}</p>` : ''}
                 ${botConectado ? '<div class="btn" style="background: #4CAF50;">🚀 Online!</div>' : ''}
                 <div class="info">
                     <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
                     <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
-                    <p style="margin-top: 15px; color: #aaa;">Atualizando automaticamente...</p>
+                    <p style="margin-top: 15px; color: #aaa; font-size: 14px;">
+                        ${!botConectado && !qrCodeDataURL ? '⚠️ Se demorar muito, verifique o terminal do servidor' : 'Atualizando automaticamente...'}
+                    </p>
                 </div>
             </body>
             </html>
@@ -156,7 +185,7 @@ const server = http.createServer((req, res) => {
                 <html>
                 <head>
                     <title>QR Code - ${STORE_NAME}</title>
-                    <meta http-equiv="refresh" content="5">
+                    <meta http-equiv="refresh" content="10">
                     <style>
                         body { 
                             font-family: Arial; 
@@ -192,19 +221,38 @@ const server = http.createServer((req, res) => {
                             0%, 100% { opacity: 1; }
                             50% { opacity: 0.7; }
                         }
+                        .alternativa {
+                            background: #333;
+                            padding: 15px;
+                            border-radius: 10px;
+                            margin: 20px auto;
+                            max-width: 500px;
+                        }
+                        .alternativa a {
+                            color: #00d9ff;
+                        }
                     </style>
                 </head>
                 <body>
                     <h1>🎮 ${STORE_NAME}</h1>
                     <h2>📱 Escaneie o QR Code</h2>
                     <div class="qr-container">
-                        <img src="${qrCodeDataURL}" alt="QR Code WhatsApp">
+                        <img src="${qrCodeDataURL}" alt="QR Code WhatsApp" onerror="this.style.display='none'; document.getElementById('fallback').style.display='block';">
+                        <div id="fallback" style="display:none; color: #333;">
+                            <p>⚠️ Erro ao carregar imagem</p>
+                            <a href="/forceqr" target="_blank">Clique aqui para ver QR em texto</a>
+                        </div>
                     </div>
                     <div class="info">
                         <p class="atualizando">🔄 Atualizando automaticamente...</p>
                         <p>1. Abra o WhatsApp no celular</p>
                         <p>2. Configurações → WhatsApp Web</p>
                         <p>3. Aponte a câmera para o QR Code</p>
+                    </div>
+                    <div class="alternativa">
+                        <p>🛠️ Se o QR Code não aparecer:</p>
+                        <p><a href="/forceqr" target="_blank">📄 Ver QR Code como texto</a></p>
+                        <p style="font-size: 12px; color: #aaa;">Copie o texto e use um gerador de QR online</p>
                     </div>
                     <a href="/" style="color: #00d9ff;">← Voltar ao início</a>
                 </body>
@@ -221,12 +269,27 @@ const server = http.createServer((req, res) => {
                         body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
                         .loading { font-size: 28px; animation: pulse 1s infinite; }
                         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+                        .dica {
+                            background: rgba(255,255,255,0.1);
+                            padding: 20px;
+                            border-radius: 15px;
+                            margin: 30px auto;
+                            max-width: 500px;
+                            text-align: left;
+                        }
                     </style>
                 </head>
                 <body>
                     <h1>⏳ Gerando QR Code...</h1>
                     <p class="loading">Aguarde o bot conectar...</p>
                     <p style="color: #aaa;">Tentativa: ${tentativasConexao}</p>
+                    <div class="dica">
+                        <p><strong>💡 Dicas:</strong></p>
+                        <p>• Verifique o terminal do servidor</p>
+                        <p>• O QR Code também aparece no terminal</p>
+                        <p>• Aguarde 10-20 segundos na primeira vez</p>
+                        <p>• Se persistir, apague a pasta <code>auth_info_baileys</code> e reinicie</p>
+                    </div>
                 </body>
                 </html>
             `);
@@ -241,20 +304,34 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Servidor web rodando na porta ${PORT}`);
     console.log(`📱 Acesse: http://localhost:${PORT}/qr`);
+    console.log(`🔧 Forçar QR: http://localhost:${PORT}/forceqr`);
 });
 
 async function atualizarQRCode(qr) {
     try {
+        console.log('🎯 atualizarQRCode() chamado!');
+        qrCodeRaw = qr; // Guarda o texto puro
+        
         const QRCode = require('qrcode');
+        console.log('📦 Módulo qrcode carregado');
+        
         qrCodeDataURL = await QRCode.toDataURL(qr, {
             width: 500,
             margin: 2,
             color: { dark: '#000000', light: '#FFFFFF' }
         });
-        console.log('✅ QR Code gerado com sucesso! Tamanho:', qrCodeDataURL.length);
+        
+        console.log('✅ QR Code Data URL gerado! Tamanho:', qrCodeDataURL.length);
+        console.log('🔗 Preview:', qrCodeDataURL.substring(0, 100) + '...');
+        
+        // Mostra no terminal também
+        console.log('\n📱📱📱 QR CODE NO TERMINAL 📱📱📱\n');
         qrcode.generate(qr, { small: true });
+        console.log('\n📱📱📱 ESCANEIE O QR CODE ACIMA 📱📱📱\n');
+        
     } catch (err) {
         console.error('❌ Erro ao gerar QR Code:', err);
+        qrCodeDataURL = null;
     }
 }
 
@@ -327,23 +404,27 @@ function calcularTempoUso(dataRegistro) {
 
 async function connectToWhatsApp() {
     tentativasConexao++;
-    console.log(`\n🔄 Tentativa de conexão #${tentativasConexao}...`);
+    console.log(`\n🔄🔄🔄 TENTATIVA DE CONEXÃO #${tentativasConexao} 🔄🔄🔄\n`);
     
     const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     console.log('📱 Criando socket do WhatsApp...');
+    console.log('📂 Auth state:', Object.keys(state.creds).length > 0 ? 'Existente' : 'Novo');
     
     const sock = makeWASocket({
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: 'debug' }), // Mudei para debug para ver mais logs
         auth: state,
         browser: ['NyuxStore Bot', 'Chrome', '1.0'],
         printQRInTerminal: false,
-        // Forçar nova conexão se não houver credenciais válidas
         markOnlineOnConnect: true,
         syncFullHistory: false,
-        shouldIgnoreJid: jid => jid?.includes('broadcast')
+        shouldIgnoreJid: jid => jid?.includes('broadcast'),
+        // Configurações adicionais para forçar QR
+        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000
     });
 
     sockGlobal = sock;
@@ -351,41 +432,46 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        console.log('📡 Evento connection.update:', { 
-            connection, 
-            temQR: !!qr, 
-            temLastDisconnect: !!lastDisconnect 
-        });
+        console.log('\n📡📡📡 EVENTO CONNECTION.UPDATE 📡📡📡');
+        console.log('Connection:', connection);
+        console.log('Tem QR:', !!qr);
+        console.log('Tem LastDisconnect:', !!lastDisconnect);
+        console.log('📡📡📡 FIM DO EVENTO 📡📡📡\n');
         
+        // SE RECEBER QR CODE
         if (qr) {
-            console.log('✅ QR CODE RECEBIDO! Gerando imagem...');
+            console.log('✅✅✅ QR CODE RECEBIDO! ✅✅✅');
+            console.log('Tamanho do QR:', qr.length);
+            console.log('Primeiros 50 caracteres:', qr.substring(0, 50));
+            
+            // Força a atualização
             await atualizarQRCode(qr);
+            
+            // Verifica se gerou
+            console.log('qrCodeDataURL gerado?', !!qrCodeDataURL);
         }
         
         if (connection === 'close') {
             botConectado = false;
-            qrCodeDataURL = null;
-            
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             
-            console.log(`❌ Conexão fechada! Código: ${statusCode}`);
+            console.log(`❌ CONEXÃO FECHADA! Código: ${statusCode} (${DisconnectReason[statusCode] || 'desconhecido'})`);
             console.log(`🔄 Reconectar? ${shouldReconnect}`);
             
             if (shouldReconnect) {
                 console.log('⏳ Reconectando em 5 segundos...');
                 setTimeout(connectToWhatsApp, 5000);
-            } else {
-                console.log('🚫 Não vou reconectar (logout detectado)');
             }
         } else if (connection === 'open') {
             botConectado = true;
             qrCodeDataURL = null;
+            qrCodeRaw = null;
             tentativasConexao = 0;
             console.log('✅✅✅ BOT CONECTADO COM SUCESSO! ✅✅✅');
             console.log('📱 Número:', sock.user?.id?.split(':')[0]);
         } else if (connection === 'connecting') {
-            console.log('⏳ Conectando...');
+            console.log('⏳ Conectando ao WhatsApp...');
         }
     });
 
@@ -841,4 +927,6 @@ async function connectToWhatsApp() {
 }
 
 console.log('🚀 Iniciando NyuxStore...');
+console.log('⚠️  IMPORTANTE: Se o QR Code não aparecer no site, verifique o TERMINAL!');
+console.log('⚠️  O QR Code também é exibido no terminal para escaneamento direto.\n');
 connectToWhatsApp();
