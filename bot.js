@@ -36,14 +36,13 @@ pastasParaLimpar.forEach(pasta => {
 console.log('');
 
 // ==========================================
-// PARSER DE CONTAS STEAM (NOVO - INTEGRADO)
+// PARSER DE CONTAS STEAM
 // ==========================================
 class ContasSteamParser {
     constructor() {
         this.contas = [];
         this.contasRemovidas = [];
 
-        // Palavras-chave que indicam conta problemática
         this.palavrasBloqueadas = [
             'mande mensagem', 'manda mensagem', 'whatsapp para conseguir',
             'chamar no whatsapp', 'solicitar acesso', 'pedir acesso',
@@ -150,51 +149,41 @@ class ContasSteamParser {
 
     processarConta(conta, linhas) {
         for (const linha of linhas) {
-            // Vídeo tutorial
             if (linha.match(/https?:\/\//)) {
                 conta.videoTutorial = linha.match(/https?:\/\/[^\s]+/)?.[0];
             }
-            // Plataforma
             else if (linha.match(/^Steam:/i)) conta.plataforma = 'Steam';
             else if (linha.match(/^Ubisoft:/i)) conta.plataforma = 'Ubisoft';
             else if (linha.match(/^Rockstar:/i)) conta.plataforma = 'Rockstar';
-            // Login
             else if (linha.match(/^(User|Usuário|Account|ACC|ID):\s*/i)) {
                 conta.login = linha.replace(/^(User|Usuário|Account|ACC|ID):\s*/i, '').trim();
             }
-            // Senha
             else if (linha.match(/^(Segurança|Senha|Password|Segurançaword|PW):\s*/i)) {
                 conta.senha = linha.replace(/^(Segurança|Senha|Password|Segurançaword|PW):\s*/i, '').trim();
             }
-            // Jogo
             else if (linha.match(/^(Jogo|Game|Games):\s*/i)) {
                 conta.jogo = linha.replace(/^(Jogo|Game|Games):\s*/i, '').trim();
             }
-            // PIN
             else if (linha.match(/pin.*code/i) || linha.match(/family.*pin/i)) {
                 const match = linha.match(/\d{4}/);
                 if (match) conta.pinCode = match[0];
             }
-            // Denuvo
             else if (linha.match(/denuvo/i)) {
                 conta.denuvo = true;
                 conta.observacoes.push('⚠️ Proteção Denuvo - máximo 5 ativações/24h');
             }
-            // Observações
             else if (linha.match(/^(⚠️|ATENÇÃO|IMPORTANTE|NOTA|OBS)/i)) {
                 const obs = linha.replace(/^(⚠️|ATENÇÃO|IMPORTANTE|NOTA|OBS):?\s*/i, '').trim();
                 if (obs) conta.observacoes.push(obs);
             }
         }
 
-        // Se não achou jogo, tenta inferir do ID
         if (!conta.jogo && conta.id) {
             conta.jogo = 'Conta Steam ' + conta.id;
         }
 
         conta.categoria = this.detectarCategoria(conta.jogo);
 
-        // Verifica se é problemática
         const verificacao = this.verificarContaProblematica(conta);
         if (verificacao.problema) {
             this.contasRemovidas.push({
@@ -207,7 +196,6 @@ class ContasSteamParser {
             return;
         }
 
-        // Só adiciona se tiver dados válidos
         if (conta.login && conta.senha && conta.login.length > 2 && conta.senha.length > 2) {
             this.contas.push(conta);
         } else {
@@ -635,7 +623,7 @@ async function connectToWhatsApp() {
         sock.ev.on('creds.update', saveCreds);
 
         // ==========================================
-        // PROCESSAMENTO DE MENSAGENS
+        // PROCESSAMENTO DE MENSAGENS (CORRIGIDO)
         // ==========================================
 
         sock.ev.on('messages.upsert', async (m) => {
@@ -646,8 +634,16 @@ async function connectToWhatsApp() {
             const participant = msg.key.participant || msg.key.remoteJid;
             const uniqueId = `${msgId}_${participant}`;
 
-            if (mensagensProcessadas.has(uniqueId)) return;
+            // VERIFICAÇÃO DUPLA DE DUPLICADOS
+            if (mensagensProcessadas.has(uniqueId)) {
+                console.log(`⏩ Mensagem ${msgId} já processada, ignorando`);
+                return;
+            }
+
+            // Marca como processada IMEDIATAMENTE
             mensagensProcessadas.add(uniqueId);
+
+            // Limpa cache se ficar muito grande
             if (mensagensProcessadas.size > 1000) {
                 const iterator = mensagensProcessadas.values();
                 mensagensProcessadas.delete(iterator.next().value);
@@ -657,6 +653,7 @@ async function connectToWhatsApp() {
             const isGroup = sender.endsWith('@g.us');
             const pushName = msg.pushName || 'Cliente';
 
+            // Extrai texto
             let text = '';
             if (msg.message.conversation) text = msg.message.conversation;
             else if (msg.message.extendedTextMessage) text = msg.message.extendedTextMessage.text;
@@ -668,6 +665,7 @@ async function connectToWhatsApp() {
 
             console.log(`\n📩 ${pushName} (${sender.split('@')[0]}): "${text}"`);
 
+            // Comandos em grupo precisam de !
             if (isGroup) {
                 if (!text.startsWith('!')) return;
                 text = text.substring(1).trim();
@@ -678,14 +676,26 @@ async function connectToWhatsApp() {
             const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
             const userState = userStates.get(sender) || { step: 'menu' };
 
+            // FLAG PARA EVITAR RESPOSTAS DUPLICADAS
+            let respostaEnviada = false;
+
+            async function enviarResposta(destino, mensagem) {
+                if (respostaEnviada) {
+                    console.log('⚠️ Resposta já enviada, ignorando duplicado');
+                    return;
+                }
+                respostaEnviada = true;
+                await sock.sendMessage(destino, mensagem);
+            }
+
             try {
                 // ========== COMANDO ADMIN ==========
                 if (text === 'admin' || text === 'adm') {
                     if (isAdmin) {
                         userStates.set(sender, { step: 'admin_menu' });
-                        await sock.sendMessage(sender, { text: getMenuAdmin() });
+                        await enviarResposta(sender, { text: getMenuAdmin() });
                     } else {
-                        await sock.sendMessage(sender, { text: '⛔ *Acesso Negado*' });
+                        await enviarResposta(sender, { text: '⛔ *Acesso Negado*' });
                     }
                     return;
                 }
@@ -694,34 +704,29 @@ async function connectToWhatsApp() {
                 if (userState.step === 'menu') {
                     if (testeExpirado && !isAdmin) {
                         if (text === '1') {
-                            await sock.sendMessage(sender, { text: `💰 Preços:
-• 7 dias: R$ 10
-• 1 mês: R$ 25
-• Lifetime: R$ 80
-
-💬 Fale com: +${ADMIN_NUMBER}` });
+                            await enviarResposta(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Fale com: +${ADMIN_NUMBER}` });
                         } else if (text === '2') {
-                            await sock.sendMessage(sender, { text: '👑 Chamando admin...' });
+                            await enviarResposta(sender, { text: '👑 Chamando admin...' });
                             await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `🚨 CLIENTE QUER COMPRAR!\n\n${pushName}\n${sender.split('@')[0]}` });
                         } else {
-                            await sock.sendMessage(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
+                            await enviarResposta(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
                         }
                         return;
                     }
 
                     switch(text) {
                         case '1':
-                            await sock.sendMessage(sender, { text: `💰 *Preços:*\n\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Para comprar, fale com:\n+${ADMIN_NUMBER}` });
+                            await enviarResposta(sender, { text: `💰 *Preços:*\n\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Para comprar, fale com:\n+${ADMIN_NUMBER}` });
                             break;
 
                         case '2':
                             userStates.set(sender, { step: 'resgatar_key' });
-                            await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
+                            await enviarResposta(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
                             break;
 
                         case '3':
                             if (!db.verificarAcesso(sender)) {
-                                await sock.sendMessage(sender, { text: '❌ Você precisa de uma key ativa!\n\nDigite 2 para resgatar ou 6 para teste grátis.' });
+                                await enviarResposta(sender, { text: '❌ Você precisa de uma key ativa!\n\nDigite 2 para resgatar ou 6 para teste grátis.' });
                                 return;
                             }
                             const jogos = db.getJogosDisponiveisPorCategoria();
@@ -734,12 +739,12 @@ async function connectToWhatsApp() {
                             }
                             msg += '🔍 Digite o *nome do jogo* que deseja:';
                             userStates.set(sender, { step: 'buscar_jogo' });
-                            await sock.sendMessage(sender, { text: msg });
+                            await enviarResposta(sender, { text: msg });
                             break;
 
                         case '4':
                             if (!db.verificarAcesso(sender)) {
-                                await sock.sendMessage(sender, { text: '❌ Precisa de key ativa! Digite 2 ou 6' });
+                                await enviarResposta(sender, { text: '❌ Precisa de key ativa! Digite 2 ou 6' });
                                 return;
                             }
                             const listaJogos = db.getJogosDisponiveisPorCategoria();
@@ -751,7 +756,7 @@ async function connectToWhatsApp() {
                                 total += lista.length;
                             }
                             msgLista += `\n🎮 *Total: ${total} jogos*'`;
-                            await sock.sendMessage(sender, { text: msgLista });
+                            await enviarResposta(sender, { text: msgLista });
                             break;
 
                         case '5':
@@ -780,21 +785,21 @@ async function connectToWhatsApp() {
                                 msgPerfil += `\n\n👑 *Você é Admin Premium!* 🌟`;
                             }
 
-                            await sock.sendMessage(sender, { text: msgPerfil });
+                            await enviarResposta(sender, { text: msgPerfil });
                             break;
 
                         case '6':
                             userStates.set(sender, { step: 'resgatar_key_teste' });
-                            await sock.sendMessage(sender, { text: '🎉 *Teste Grátis*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ *Apenas 1 teste por pessoa!*\n\nDigite o número:' });
+                            await enviarResposta(sender, { text: '🎉 *Teste Grátis*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ *Apenas 1 teste por pessoa!*\n\nDigite o número:' });
                             break;
 
                         case '0':
-                            await sock.sendMessage(sender, { text: '💬 Chamando atendente... Aguarde.' });
+                            await enviarResposta(sender, { text: '💬 Chamando atendente... Aguarde.' });
                             await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 Cliente solicitou atendente:\n\n*${pushName}*\n${sender.split('@')[0]}\n\nDigite para responder.` });
                             break;
 
                         default:
-                            await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                            await enviarResposta(sender, { text: getMenuPrincipal(pushName) });
                     }
                 }
 
@@ -806,31 +811,31 @@ async function connectToWhatsApp() {
                         const resultado = db.resgatarMasterKey(key, sender, pushName);
                         if (resultado.sucesso) {
                             userStates.set(sender, { step: 'menu' });
-                            await sock.sendMessage(sender, { 
+                            await enviarResposta(sender, { 
                                 text: `👑 *MASTER KEY ATIVADA!*\n\n🎉 Parabéns ${pushName}!\nVocê agora é *ADMINISTRADOR PERMANENTE*!\n\n⚠️ Esta key foi bloqueada após uso.\n\n🔧 Digite: *admin* para acessar o painel.` 
                             });
                             await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
                                 text: `🚨 *MASTER KEY USADA!*\n\n👤 ${pushName}\n📱 ${sender.split('@')[0]}\n⏰ ${new Date().toLocaleString()}` 
                             });
                         } else {
-                            await sock.sendMessage(sender, { text: `❌ *${resultado.erro}*` });
+                            await enviarResposta(sender, { text: `❌ *${resultado.erro}*` });
                         }
                         return;
                     }
 
                     if (!key.match(/^NYUX-[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
-                        await sock.sendMessage(sender, { text: '❌ *Formato inválido!*\n\nUse: *NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
+                        await enviarResposta(sender, { text: '❌ *Formato inválido!*\n\nUse: *NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
                         return;
                     }
 
                     const resultado = db.resgatarKey(key, sender, pushName);
                     if (resultado.sucesso) {
                         userStates.set(sender, { step: 'menu' });
-                        await sock.sendMessage(sender, { 
+                        await enviarResposta(sender, { 
                             text: `✅ *KEY RESGATADA COM SUCESSO!*\n\n🎆 *Plano:* ${resultado.plano}\n⏱️ *Duração:* ${resultado.duracao}\n📅 *Expira em:* ${resultado.expira}\n\n🎮 Seu acesso foi liberado!\nDigite *menu* para ver as opções.` 
                         });
                     } else {
-                        await sock.sendMessage(sender, { text: `❌ *Erro:* ${resultado.erro}` });
+                        await enviarResposta(sender, { text: `❌ *Erro:* ${resultado.erro}` });
                     }
                 }
 
@@ -842,13 +847,13 @@ async function connectToWhatsApp() {
                     else if (text === '2') { duracao = '2 horas'; horas = 2; }
                     else if (text === '3') { duracao = '6 horas'; horas = 6; }
                     else {
-                        await sock.sendMessage(sender, { text: '❌ Opção inválida!\n\nDigite:\n1️⃣ para 1 hora\n2️⃣ para 2 horas\n3️⃣ para 6 horas' });
+                        await enviarResposta(sender, { text: '❌ Opção inválida!\n\nDigite:\n1️⃣ para 1 hora\n2️⃣ para 2 horas\n3️⃣ para 6 horas' });
                         return;
                     }
 
                     if (db.verificarTesteUsado(sender)) {
                         userStates.set(sender, { step: 'menu' });
-                        await sock.sendMessage(sender, { text: '❌ *Você já usou seu teste grátis!*\n\n💰 Compre uma key:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Fale com: +' + ADMIN_NUMBER });
+                        await enviarResposta(sender, { text: '❌ *Você já usou seu teste grátis!*\n\n💰 Compre uma key:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Fale com: +' + ADMIN_NUMBER });
                         return;
                     }
 
@@ -857,11 +862,11 @@ async function connectToWhatsApp() {
 
                     if (resultado.sucesso) {
                         userStates.set(sender, { step: 'menu' });
-                        await sock.sendMessage(sender, { 
+                        await enviarResposta(sender, { 
                             text: `🎉 *TESTE ATIVADO!*\n\n🔑 *Key:* ${keyTeste}\n⏱️ *Duração:* ${duracao}\n📅 *Expira em:* ${resultado.expira}\n\n✅ *Acesso liberado!*\n\nAproveite para testar nossos jogos!\nDigite *menu* para começar.` 
                         });
                     } else {
-                        await sock.sendMessage(sender, { text: `❌ Erro: ${resultado.erro}` });
+                        await enviarResposta(sender, { text: `❌ Erro: ${resultado.erro}` });
                     }
                 }
 
@@ -871,11 +876,11 @@ async function connectToWhatsApp() {
 
                     if (conta) {
                         userStates.set(sender, { step: 'menu' });
-                        await sock.sendMessage(sender, {
+                        await enviarResposta(sender, {
                             text: `🎮 *${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 *Login:* ${conta.login}\n🔒 *Senha:* ${conta.senha}\n\n⚠️ *IMPORTANTE:*\n• Use modo OFFLINE\n• NÃO altere a senha\n• NÃO compartilhe esta conta\n\n🎮 Bom jogo!` 
                         });
                     } else {
-                        await sock.sendMessage(sender, { text: `❌ Jogo *"${text}"* não encontrado.\n\n🔍 Tente digitar o nome exato ou digite *4* para ver a lista completa.` });
+                        await enviarResposta(sender, { text: `❌ Jogo *"${text}"* não encontrado.\n\n🔍 Tente digitar o nome exato ou digite *4* para ver a lista completa.` });
                     }
                 }
 
@@ -884,29 +889,29 @@ async function connectToWhatsApp() {
                     switch(text) {
                         case '1':
                             userStates.set(sender, { step: 'admin_add_nome', tempConta: {} });
-                            await sock.sendMessage(sender, { text: '➕ *Adicionar Conta*\n\nDigite o *nome do jogo*:' });
+                            await enviarResposta(sender, { text: '➕ *Adicionar Conta*\n\nDigite o *nome do jogo*:' });
                             break;
 
                         case '2':
                             userStates.set(sender, { step: 'admin_gerar_key' });
-                            await sock.sendMessage(sender, { text: '🔑 *Gerar Key*\n\nEscolha o plano:\n\n1️⃣ 7 dias - R$ 10\n2️⃣ 1 mês - R$ 25\n3️⃣ Lifetime - R$ 80\n\nDigite o número:' });
+                            await enviarResposta(sender, { text: '🔑 *Gerar Key*\n\nEscolha o plano:\n\n1️⃣ 7 dias - R$ 10\n2️⃣ 1 mês - R$ 25\n3️⃣ Lifetime - R$ 80\n\nDigite o número:' });
                             break;
 
                         case '3':
                             userStates.set(sender, { step: 'admin_gerar_teste' });
-                            await sock.sendMessage(sender, { text: '🎁 *Gerar Key Teste*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\nDigite o número:' });
+                            await enviarResposta(sender, { text: '🎁 *Gerar Key Teste*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\nDigite o número:' });
                             break;
 
-                        case '4': // NOVO: Importar com Parser Inteligente
+                        case '4':
                             userStates.set(sender, { step: 'admin_importar_parser' });
-                            await sock.sendMessage(sender, { 
-                                text: `📄 *IMPORTAR CONTAS STEAM (NOVO)*\n\nEnvie o arquivo *contas_steam_nyuxstore.txt*\n\n⚡ O bot vai:\n✅ Extrair automaticamente login/senha\n🗑️ Remover contas problemáticas (que precisam de WhatsApp)\n📂 Organizar por categoria\n\nOu digite *AUTO* para usar arquivo local` 
+                            await enviarResposta(sender, { 
+                                text: `📄 *IMPORTAR CONTAS STEAM*\n\nEnvie o arquivo *contas_steam_nyuxstore.txt*\n\n⚡ O bot vai:\n✅ Extrair automaticamente login/senha\n🗑️ Remover contas problemáticas\n📂 Organizar por categoria\n\nOu digite *AUTO* para usar arquivo local` 
                             });
                             break;
 
                         case '5':
                             const stats = db.getEstatisticas();
-                            await sock.sendMessage(sender, { 
+                            await enviarResposta(sender, { 
                                 text: `📊 *Estatísticas*\n\n🎮 Total de jogos: ${stats.totalJogos}\n✅ Disponíveis: ${stats.disponiveis}\n🔑 Keys ativas: ${stats.keysAtivas}\n👥 Clientes: ${stats.totalClientes}\n🔐 Master Key: ${stats.masterKeyUsada ? 'Usada' : 'Disponível'}` 
                             });
                             break;
@@ -918,12 +923,12 @@ async function connectToWhatsApp() {
                                 msgJogos += `${i + 1}. ${j.jogo} (${j.categoria})\n`;
                             });
                             msgJogos += `\nTotal: ${todosJogos.length} jogos`;
-                            await sock.sendMessage(sender, { text: msgJogos });
+                            await enviarResposta(sender, { text: msgJogos });
                             break;
 
                         case '7':
                             userStates.set(sender, { step: 'admin_broadcast' });
-                            await sock.sendMessage(sender, { text: '📢 *Broadcast*\n\nDigite a mensagem que será enviada para *todos* os clientes:' });
+                            await enviarResposta(sender, { text: '📢 *Broadcast*\n\nDigite a mensagem que será enviada para *todos* os clientes:' });
                             break;
 
                         case '8':
@@ -935,11 +940,11 @@ async function connectToWhatsApp() {
                             });
                             if (jogosRemover.length > 15) msgRemover += `...e mais ${jogosRemover.length - 15}\n`;
                             msgRemover += '\nDigite o *número* ou *nome* do jogo:';
-                            await sock.sendMessage(sender, { text: msgRemover });
+                            await enviarResposta(sender, { text: msgRemover });
                             break;
 
                         case '9':
-                            await sock.sendMessage(sender, { 
+                            await enviarResposta(sender, { 
                                 text: `👥 *Entrar em Grupo*\n\n1️⃣ Adicione o número *+${BOT_NUMBER}* no grupo\n2️⃣ Dê permissão de *ADMIN*\n3️⃣ Digite *!menu* no grupo\n\n⚠️ O bot só responde comandos que começam com ! em grupos` 
                             });
                             break;
@@ -947,23 +952,22 @@ async function connectToWhatsApp() {
                         case '0':
                         case 'menu':
                             userStates.set(sender, { step: 'menu' });
-                            await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                            await enviarResposta(sender, { text: getMenuPrincipal(pushName) });
                             break;
 
                         default:
-                            await sock.sendMessage(sender, { text: getMenuAdmin() });
+                            await enviarResposta(sender, { text: getMenuAdmin() });
                     }
                 }
 
-                // ========== ADMIN: IMPORTAR COM PARSER (NOVO) ==========
+                // ========== ADMIN: IMPORTAR COM PARSER ==========
                 else if (userState.step === 'admin_importar_parser' && isAdmin) {
                     if (text === 'auto' || text === 'AUTO') {
-                        // Processa arquivo local automaticamente
-                        await sock.sendMessage(sender, { text: '⏳ Processando arquivo local *contas_steam_nyuxstore.txt*...' });
+                        await enviarResposta(sender, { text: '⏳ Processando arquivo local...' });
 
                         try {
                             if (!fs.existsSync('contas_steam_nyuxstore.txt')) {
-                                await sock.sendMessage(sender, { text: '❌ Arquivo *contas_steam_nyuxstore.txt* não encontrado!\n\nEnvie o arquivo primeiro.' });
+                                await enviarResposta(sender, { text: '❌ Arquivo não encontrado! Envie o arquivo primeiro.' });
                                 userStates.set(sender, { step: 'admin_menu' });
                                 return;
                             }
@@ -975,48 +979,32 @@ async function connectToWhatsApp() {
                             const resumo = parser.gerarResumo();
                             let adicionadas = 0;
 
-                            // Adiciona ao database
                             for (const conta of parser.contas) {
                                 try {
                                     db.addConta(conta.jogo, conta.categoria, conta.login, conta.senha);
                                     adicionadas++;
-                                } catch (e) {
-                                    console.log('Erro ao adicionar conta:', e.message);
-                                }
+                                } catch (e) {}
                             }
 
                             userStates.set(sender, { step: 'admin_menu' });
 
                             let msgResultado = `✅ *IMPORTAÇÃO CONCLUÍDA!*\n\n`;
-                            msgResultado += `📊 *Resumo:*\n`;
                             msgResultado += `✅ Aprovadas: ${resumo.aprovadas}\n`;
                             msgResultado += `❌ Removidas: ${resumo.removidas}\n`;
-                            msgResultado += `💾 Adicionadas ao DB: ${adicionadas}\n\n`;
+                            msgResultado += `💾 Adicionadas: ${adicionadas}`;
 
-                            if (resumo.removidas > 0) {
-                                msgResultado += `🗑️ *Motivos das remoções:*\n`;
-                                msgResultado += `• Contas que precisam de WhatsApp\n`;
-                                msgResultado += `• Login/senha inválidos\n\n`;
-                            }
-
-                            msgResultado += `📂 *Categorias detectadas:*\n`;
-                            Object.entries(resumo.porCategoria).forEach(([cat, qtd]) => {
-                                msgResultado += `• ${cat}: ${qtd}\n`;
-                            });
-
-                            await sock.sendMessage(sender, { text: msgResultado });
+                            await enviarResposta(sender, { text: msgResultado });
 
                         } catch (err) {
-                            console.error('Erro na importação:', err);
-                            await sock.sendMessage(sender, { text: '❌ Erro ao processar arquivo. Verifique o console.' });
+                            console.error('Erro:', err);
+                            await enviarResposta(sender, { text: '❌ Erro ao processar.' });
                             userStates.set(sender, { step: 'admin_menu' });
                         }
                         return;
                     }
 
-                    // Se enviou documento
                     if (msg.message.documentMessage) {
-                        await sock.sendMessage(sender, { text: '⏳ Baixando e processando arquivo...' });
+                        await enviarResposta(sender, { text: '⏳ Processando arquivo...' });
 
                         try {
                             const stream = await sock.downloadContentFromMessage(msg.message.documentMessage, 'document');
@@ -1042,23 +1030,20 @@ async function connectToWhatsApp() {
                             userStates.set(sender, { step: 'admin_menu' });
 
                             let msgResultado = `✅ *ARQUIVO PROCESSADO!*\n\n`;
-                            msgResultado += `📄 ${msg.message.documentMessage.fileName || 'Arquivo recebido'}\n\n`;
-                            msgResultado += `📊 *Resultado:*\n`;
-                            msgResultado += `✅ Contas válidas: ${resumo.aprovadas}\n`;
+                            msgResultado += `✅ Válidas: ${resumo.aprovadas}\n`;
                             msgResultado += `❌ Removidas: ${resumo.removidas}\n`;
-                            msgResultado += `💾 Adicionadas: ${adicionadas}\n\n`;
-                            msgResultado += `⚡ Pronto para uso!`;
+                            msgResultado += `💾 Adicionadas: ${adicionadas}`;
 
-                            await sock.sendMessage(sender, { text: msgResultado });
+                            await enviarResposta(sender, { text: msgResultado });
 
                         } catch (err) {
                             console.error('Erro:', err);
-                            await sock.sendMessage(sender, { text: '❌ Erro ao processar arquivo.' });
+                            await enviarResposta(sender, { text: '❌ Erro ao processar arquivo.' });
                             userStates.set(sender, { step: 'admin_menu' });
                         }
                     } else {
-                        await sock.sendMessage(sender, { 
-                            text: `📄 *Aguardando arquivo...*\n\nEnvie o arquivo *contas_steam_nyuxstore.txt*\n\nOu digite *AUTO* para usar arquivo local` 
+                        await enviarResposta(sender, { 
+                            text: `📄 *Aguardando arquivo...*\n\nEnvie o arquivo ou digite *AUTO*` 
                         });
                     }
                 }
@@ -1079,7 +1064,7 @@ async function connectToWhatsApp() {
                     categorias.forEach((cat, i) => {
                         msgCat += `${i + 1}. ${cat}\n`;
                     });
-                    await sock.sendMessage(sender, { text: msgCat });
+                    await enviarResposta(sender, { text: msgCat });
                 }
 
                 else if (userState.step === 'admin_add_cat' && isAdmin) {
@@ -1090,9 +1075,9 @@ async function connectToWhatsApp() {
                         const temp = userState.tempConta || {};
                         temp.categoria = cats[escolha];
                         userStates.set(sender, { step: 'admin_add_login', tempConta: temp });
-                        await sock.sendMessage(sender, { text: '➕ Digite o *login* (e-mail ou usuário):' });
+                        await enviarResposta(sender, { text: '➕ Digite o *login*:' });
                     } else {
-                        await sock.sendMessage(sender, { text: '❌ Categoria inválida! Digite um número de 1 a 12:' });
+                        await enviarResposta(sender, { text: '❌ Categoria inválida! Digite 1-12:' });
                     }
                 }
 
@@ -1100,7 +1085,7 @@ async function connectToWhatsApp() {
                     const temp = userState.tempConta || {};
                     temp.login = text;
                     userStates.set(sender, { step: 'admin_add_senha', tempConta: temp });
-                    await sock.sendMessage(sender, { text: '➕ Digite a *senha*:' });
+                    await enviarResposta(sender, { text: '➕ Digite a *senha*:' });
                 }
 
                 else if (userState.step === 'admin_add_senha' && isAdmin) {
@@ -1110,8 +1095,8 @@ async function connectToWhatsApp() {
                     db.addConta(temp.jogo, temp.categoria, temp.login, temp.senha);
                     userStates.set(sender, { step: 'admin_menu' });
 
-                    await sock.sendMessage(sender, {
-                        text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}` 
+                    await enviarResposta(sender, {
+                        text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n👤 ${temp.login}` 
                     });
                 }
 
@@ -1123,7 +1108,7 @@ async function connectToWhatsApp() {
                     else if (text === '2') { plano = '1 mês'; dias = 30; }
                     else if (text === '3') { plano = 'Lifetime'; dias = 99999; }
                     else {
-                        await sock.sendMessage(sender, { text: '❌ Opção inválida! Digite 1, 2 ou 3:' });
+                        await enviarResposta(sender, { text: '❌ Opção inválida! Digite 1, 2 ou 3:' });
                         return;
                     }
 
@@ -1131,8 +1116,8 @@ async function connectToWhatsApp() {
                     db.criarKey(key, plano, dias);
                     userStates.set(sender, { step: 'admin_menu' });
 
-                    await sock.sendMessage(sender, {
-                        text: `🔑 *KEY GERADA!*\n\n*${key}*\n\n⏱️ Plano: ${plano}\n💰 Valor: ${text === '1' ? 'R$ 10' : text === '2' ? 'R$ 25' : 'R$ 80'}\n\n✅ Key pronta para venda!` 
+                    await enviarResposta(sender, {
+                        text: `🔑 *KEY GERADA!*\n\n*${key}*\n\n⏱️ ${plano}` 
                     });
                 }
 
@@ -1144,7 +1129,7 @@ async function connectToWhatsApp() {
                     else if (text === '2') { duracao = '2 horas'; horas = 2; }
                     else if (text === '3') { duracao = '6 horas'; horas = 6; }
                     else {
-                        await sock.sendMessage(sender, { text: '❌ Opção inválida! Digite 1, 2 ou 3:' });
+                        await enviarResposta(sender, { text: '❌ Opção inválida! Digite 1, 2 ou 3:' });
                         return;
                     }
 
@@ -1152,8 +1137,8 @@ async function connectToWhatsApp() {
                     db.criarKey(key, duracao, horas, true);
                     userStates.set(sender, { step: 'admin_menu' });
 
-                    await sock.sendMessage(sender, {
-                        text: `🎁 *KEY TESTE GERADA!*\n\n*${key}*\n\n⏱️ Duração: ${duracao}\n\nEnvie para o cliente!` 
+                    await enviarResposta(sender, {
+                        text: `🎁 *KEY TESTE!*\n\n*${key}*\n\n⏱️ ${duracao}` 
                     });
                 }
 
@@ -1162,22 +1147,20 @@ async function connectToWhatsApp() {
                     const clientes = db.getTodosClientes();
                     let enviados = 0;
 
-                    await sock.sendMessage(sender, { text: `📢 Enviando para ${clientes.length} clientes...` });
+                    await enviarResposta(sender, { text: `📢 Enviando para ${clientes.length} clientes...` });
 
                     for (const cliente of clientes) {
                         try {
                             await sock.sendMessage(cliente.numero, {
-                                text: `📢 *${STORE_NAME}*\n\n${text}\n\n_Para parar de receber, diga ao administrador._` 
+                                text: `📢 *${STORE_NAME}*\n\n${text}` 
                             });
                             enviados++;
                             await delay(1500);
-                        } catch (e) {
-                            console.log('Erro ao enviar para:', cliente.numero);
-                        }
+                        } catch (e) {}
                     }
 
                     userStates.set(sender, { step: 'admin_menu' });
-                    await sock.sendMessage(sender, { text: `✅ Broadcast enviado!\n\n📊 ${enviados}/${clientes.length} clientes alcançados.` });
+                    await enviarResposta(sender, { text: `✅ Enviado para ${enviados} clientes.` });
                 }
 
                 // ========== ADMIN: REMOVER CONTA ==========
@@ -1189,25 +1172,23 @@ async function connectToWhatsApp() {
                         const conta = lista[escolha - 1];
                         userStates.set(sender, { 
                             step: 'admin_remover_confirmar', 
-                            tempConta: conta,
-                            tempLista: lista 
+                            tempConta: conta 
                         });
-                        await sock.sendMessage(sender, { 
-                            text: `❌ *Confirmar remoção?*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\nDigite *sim* para confirmar ou *não* para cancelar:` 
+                        await enviarResposta(sender, { 
+                            text: `❌ *Confirmar remoção?*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\nDigite *sim* ou *não*:` 
                         });
                     } else {
                         const resultado = db.buscarConta(text);
                         if (resultado) {
                             userStates.set(sender, { 
                                 step: 'admin_remover_confirmar', 
-                                tempConta: resultado,
-                                tempLista: lista 
+                                tempConta: resultado 
                             });
-                            await sock.sendMessage(sender, { 
-                                text: `❌ *Confirmar remoção?*\n\n🎮 ${resultado.jogo}\n👤 ${resultado.login}\n\nDigite *sim* para confirmar ou *não* para cancelar:` 
+                            await enviarResposta(sender, { 
+                                text: `❌ *Confirmar remoção?*\n\n🎮 ${resultado.jogo}\n👤 ${resultado.login}\n\nDigite *sim* ou *não*:` 
                             });
                         } else {
-                            await sock.sendMessage(sender, { text: '❌ Conta não encontrada. Digite o número ou nome correto:' });
+                            await enviarResposta(sender, { text: '❌ Conta não encontrada.' });
                         }
                     }
                 }
@@ -1219,15 +1200,15 @@ async function connectToWhatsApp() {
 
                         if (resultado.sucesso) {
                             userStates.set(sender, { step: 'admin_menu' });
-                            await sock.sendMessage(sender, { 
-                                text: `✅ *Conta removida!*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\n📊 Total restante: ${resultado.totalRestante} contas` 
+                            await enviarResposta(sender, { 
+                                text: `✅ *Removida!*\n\n🎮 ${conta.jogo}\n📊 Restante: ${resultado.totalRestante}` 
                             });
                         } else {
-                            await sock.sendMessage(sender, { text: `❌ Erro: ${resultado.erro}` });
+                            await enviarResposta(sender, { text: `❌ Erro: ${resultado.erro}` });
                         }
                     } else {
                         userStates.set(sender, { step: 'admin_menu' });
-                        await sock.sendMessage(sender, { text: '✅ Cancelado. Voltando ao menu admin.' });
+                        await enviarResposta(sender, { text: '✅ Cancelado.' });
                     }
                 }
 
@@ -1237,14 +1218,14 @@ async function connectToWhatsApp() {
                     const perfilAtual = db.getPerfil(sender);
 
                     if (perfilAtual.usouTeste && !perfilAtual.temAcesso && !isAdmin) {
-                        await sock.sendMessage(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
+                        await enviarResposta(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar\n2️⃣ Falar com Admin\n0️⃣ Atendente` });
                     } else {
-                        await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                        await enviarResposta(sender, { text: getMenuPrincipal(pushName) });
                     }
                 }
 
             } catch (error) {
-                console.error('❌ Erro ao processar mensagem:', error);
+                console.error('❌ Erro:', error);
             }
         });
 
