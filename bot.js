@@ -5,18 +5,22 @@ const http = require('http');
 const Database = require('./database');
 const moment = require('moment');
 
-// Configurações
-const BOT_NUMBER = '556183040115';
-const ADMIN_NUMBER = '5518997972598'; // Seu número principal (apenas dígitos)
-const STORE_NAME = 'NyuxStore';
+// Configurações - ADMIN VIA VARIÁVEL DE AMBIENTE
+const BOT_NUMBER = process.env.BOT_NUMBER || '556183040115';
+const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '5518997972598'; // Pega do Railway ou usa padrão
+const STORE_NAME = process.env.STORE_NAME || 'NyuxStore';
 const PORT = process.env.PORT || 8080;
+
+console.log('🔧 Configurações carregadas:');
+console.log('👑 Admin:', ADMIN_NUMBER);
+console.log('🤖 Bot:', BOT_NUMBER);
 
 const db = new Database();
 const userStates = new Map();
 
 // Controle de mensagens processadas (evita duplicatas)
 const mensagensProcessadas = new Set();
-const TEMPO_LIMPEZA_MS = 5 * 60 * 1000; // Limpa mensagens antigas a cada 5 minutos
+const TEMPO_LIMPEZA_MS = 5 * 60 * 1000; // 5 minutos
 
 // Variáveis globais
 let qrCodeDataURL = null;
@@ -27,7 +31,7 @@ let sockGlobal = null;
 setInterval(() => {
     mensagensProcessadas.clear();
     console.log('🧹 Cache de mensagens limpo');
-}, TEMPO_LIMPEFA_MS);
+}, TEMPO_LIMPEZA_MS);
 
 // ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
@@ -243,18 +247,12 @@ async function atualizarQRCode(qr) {
     }
 }
 
-// Função para verificar se é admin (CORRIGIDA)
+// Função para verificar se é admin
 function verificarAdmin(sender) {
-    // Remove @s.whatsapp.net e @g.us e qualquer sufixo após :
     const numeroLimpo = sender
         .replace('@s.whatsapp.net', '')
         .replace('@g.us', '')
-        .split(':')[0]; // Remove o :1 ou :2 que o WhatsApp adiciona
-    
-    console.log('🔍 DEBUG - Sender original:', sender);
-    console.log('🔍 DEBUG - Número limpo:', numeroLimpo);
-    console.log('🔍 DEBUG - ADMIN_NUMBER:', ADMIN_NUMBER);
-    console.log('🔍 DEBUG - Comparação:', numeroLimpo === ADMIN_NUMBER);
+        .split(':')[0];
     
     return numeroLimpo === ADMIN_NUMBER;
 }
@@ -340,10 +338,8 @@ async function connectToWhatsApp() {
         markOnlineOnConnect: true,
         keepAliveIntervalMs: 30000,
         shouldIgnoreJid: jid => false,
-        // Configurações para evitar duplicatas
         msgRetryCounterMap: {},
-        defaultQueryTimeoutMs: undefined,
-        syncFullHistory: false
+        defaultQueryTimeoutMs: undefined
     });
 
     sockGlobal = sock;
@@ -379,24 +375,19 @@ async function connectToWhatsApp() {
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         
-        // Ignora mensagens do próprio bot
         if (!msg.message || msg.key.fromMe) return;
 
-        // Cria ID único da mensagem para evitar duplicatas
         const msgId = msg.key.id;
         const participant = msg.key.participant || msg.key.remoteJid;
         const uniqueId = `${msgId}_${participant}`;
         
-        // Verifica se já processou esta mensagem
         if (mensagensProcessadas.has(uniqueId)) {
             console.log('🔄 Mensagem duplicada ignorada:', msgId);
             return;
         }
         
-        // Marca como processada
         mensagensProcessadas.add(uniqueId);
         
-        // Limita tamanho do cache
         if (mensagensProcessadas.size > 1000) {
             const iterator = mensagensProcessadas.values();
             mensagensProcessadas.delete(iterator.next().value);
@@ -406,7 +397,6 @@ async function connectToWhatsApp() {
         const isGroup = sender.endsWith('@g.us');
         const pushName = msg.pushName || 'Cliente';
         
-        // Extrai texto da mensagem
         let text = '';
         let isMentioned = false;
         
@@ -430,24 +420,21 @@ async function connectToWhatsApp() {
         
         console.log(`\n📩 Nova mensagem de ${pushName} (${sender}): "${text}"`);
         
-        // No grupo, só responde se mencionado ou com !
         if (isGroup) {
             const isCommand = text.startsWith('!');
             if (!isMentioned && !isCommand) return;
             if (isCommand) text = text.substring(1).trim();
         }
 
-        // Verifica admin usando função corrigida
         const isAdmin = verificarAdmin(sender);
         const perfil = db.getPerfil(sender);
         const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
         const userState = userStates.get(sender) || { step: 'menu' };
 
         try {
-            // COMANDO ADMIN - COM LOGS DETALHADOS
+            // COMANDO ADMIN
             if (text === 'admin' || text === 'adm') {
-                console.log('🔑 Tentativa de acesso admin');
-                console.log('🔑 isAdmin:', isAdmin);
+                console.log('🔑 Tentativa de acesso admin. isAdmin:', isAdmin);
                 
                 if (isAdmin) {
                     console.log('✅ Admin autorizado!');
@@ -456,7 +443,7 @@ async function connectToWhatsApp() {
                 } else {
                     console.log('❌ Acesso negado para:', sender);
                     await sock.sendMessage(sender, { 
-                        text: '⛔ *Acesso Negado*\n\nVocê não tem permissão para acessar o painel admin.\n\nSe você é o dono, verifique se o número está correto no código.' 
+                        text: '⛔ *Acesso Negado*\n\nVocê não tem permissão.' 
                     });
                 }
                 return;
@@ -516,7 +503,7 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +${ADMIN_NUMBER}` });
                 } else if (text === '2') {
                     userStates.set(sender, { step: 'resgatar_key' });
-                    await sock.sendMessage(sender, { text: '🎁 Digite sua key (NYUX-XXXX-XXXX):' });
+                    await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
                 } else if (text === '3') {
                     if (!db.verificarAcesso(sender)) {
                         await sock.sendMessage(sender, { text: '❌ Precisa de key! Digite 2 ou 6' });
@@ -551,7 +538,7 @@ async function connectToWhatsApp() {
                 } else if (text === '5') {
                     const p = db.getPerfil(sender);
                     const numLimpo = sender.replace('@s.whatsapp.net', '').split(':')[0];
-                    let msg = `👤 *Perfil*\n📱 ${numLimpo}\n⏱️ ${p.temAcesso ? '✅' : '❌'}\n🎮 Jogos: ${p.totalResgatados}`;
+                    let msg = `👤 *Perfil*\n📱 ${numLimpo}\n⏱️ ${p.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n🎮 Jogos: ${p.totalResgatados}`;
                     if (p.keyInfo) msg += `\n🔑 ${p.keyInfo.key}\n📅 ${p.keyInfo.expira}`;
                     if (p.usouTeste && !p.temAcesso) msg += `\n\n😢 Teste expirou!`;
                     await sock.sendMessage(sender, { text: msg });
@@ -567,15 +554,33 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
-            // RESGATAR KEY
+            // RESGATAR KEY - CORRIGIDO!
             else if (userState.step === 'resgatar_key') {
                 const key = text.toUpperCase().replace(/\s/g, '');
-                const r = db.resgatarKey(key, sender, pushName);
-                if (r.sucesso) {
+                
+                console.log('🔑 Tentativa de resgatar key:', key);
+                
+                // Valida formato da key
+                if (!key.match(/^NYUX-[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
+                    await sock.sendMessage(sender, { 
+                        text: '❌ *Formato inválido!*\n\nA key deve estar no formato:\n*NYUX-XXXX-XXXX*\n\n_Tente novamente ou digite *menu* para cancelar._' 
+                    });
+                    return;
+                }
+                
+                // Tenta resgatar a key
+                const resultado = db.resgatarKey(key, sender, pushName);
+                
+                if (resultado.sucesso) {
                     userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, { text: `✅ *Key Ativada!*\n\n🎆 ${r.plano}\n📅 ${r.expira}` });
+                    await sock.sendMessage(sender, { 
+                        text: `✅ *Key Resgatada com Sucesso!*\n\n🎆 Plano: ${resultado.plano}\n⏱️ Duração: ${resultado.duracao}\n📅 Expira em: ${resultado.expira}\n\n🎮 Agora você tem acesso a todos os jogos!\n\n_Digite *menu* para ver as opções._` 
+                    });
                 } else {
-                    await sock.sendMessage(sender, { text: `❌ ${r.erro}` });
+                    // Mostra erro específico
+                    await sock.sendMessage(sender, { 
+                        text: `❌ *Erro ao resgatar key*\n\n${resultado.erro}\n\n_Tente novamente ou digite *menu* para cancelar._` 
+                    });
                 }
             }
             // TESTE GRÁTIS
@@ -786,6 +791,4 @@ async function connectToWhatsApp() {
 
 // Iniciar
 console.log('🚀 Iniciando NyuxStore...');
-console.log('👑 Admin configurado:', ADMIN_NUMBER);
-console.log('🤖 Bot:', BOT_NUMBER);
 connectToWhatsApp();
