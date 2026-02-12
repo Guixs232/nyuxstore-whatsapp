@@ -5,39 +5,33 @@ const http = require('http');
 const Database = require('./database');
 const moment = require('moment');
 
-// Configurações - ADMIN via variável de ambiente OU código
+// Configurações
 const BOT_NUMBER = process.env.BOT_NUMBER || '556183040115';
 const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '5518997972598';
 const STORE_NAME = process.env.STORE_NAME || 'NyuxStore';
 const PORT = process.env.PORT || 8080;
 
-// KEY DE ADMIN ESPECIAL (Uso Único!)
 const ADMIN_MASTER_KEY = 'NYUX-ADM1-GUIXS23';
 
 console.log('🔧 Configurações carregadas:');
 console.log('👑 Admin:', ADMIN_NUMBER);
 console.log('🤖 Bot:', BOT_NUMBER);
-console.log('🔐 Master Key:', ADMIN_MASTER_KEY);
 
 const db = new Database();
 const userStates = new Map();
 
-// Controle de mensagens processadas (evita duplicatas)
 const mensagensProcessadas = new Set();
-const TEMPO_LIMPEZA_MS = 5 * 60 * 1000; // 5 minutos
+const TEMPO_LIMPEZA_MS = 5 * 60 * 1000;
 
-// Variáveis globais
 let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
 
-// Limpa mensagens antigas periodicamente
 setInterval(() => {
     mensagensProcessadas.clear();
     console.log('🧹 Cache de mensagens limpo');
 }, TEMPO_LIMPEZA_MS);
 
-// ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -84,144 +78,36 @@ const server = http.createServer((req, res) => {
                         margin: 20px;
                         box-shadow: 0 4px 15px rgba(0,217,255,0.4);
                     }
-                    .info {
-                        background: rgba(255,255,255,0.1);
-                        padding: 20px;
-                        border-radius: 15px;
-                        margin: 20px auto;
-                        max-width: 600px;
-                    }
                 </style>
             </head>
             <body>
                 <h1>🎮 ${STORE_NAME} Bot</h1>
                 <div class="status ${botConectado ? 'online' : 'offline'}">
-                    ${botConectado ? '✅ Bot Conectado e Online!' : '⏳ Aguardando QR Code...'}
+                    ${botConectado ? '✅ Bot Conectado!' : '⏳ Aguardando QR Code...'}
                 </div>
-                ${!botConectado ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : '<div class="btn" style="background: #4CAF50;">🚀 Bot Online!</div>'}
-                <div class="info">
-                    <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
-                    <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
-                </div>
+                ${!botConectado ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : '<div class="btn" style="background: #4CAF50;">🚀 Online!</div>'}
             </body>
             </html>
         `);
     }
     else if (url === '/qr') {
         if (botConectado) {
-            res.end(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Conectado - ${STORE_NAME}</title>
-                    <style>
-                        body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
-                        .success { background: #4CAF50; padding: 40px; border-radius: 20px; margin: 50px auto; max-width: 500px; }
-                    </style>
-                </head>
-                <body>
-                    <div class="success">
-                        <h1>✅ Bot Já Conectado!</h1>
-                        <p>O bot está online.</p>
-                    </div>
-                </body>
-                </html>
-            `);
+            res.end(`<html><body style="text-align:center;padding:50px;"><h1>✅ Já Conectado!</h1></body></html>`);
         } else if (qrCodeDataURL) {
             res.end(`
                 <!DOCTYPE html>
                 <html>
-                <head>
-                    <title>QR Code - ${STORE_NAME}</title>
-                    <meta http-equiv="refresh" content="5">
-                    <style>
-                        body { 
-                            font-family: Arial; 
-                            text-align: center; 
-                            padding: 20px; 
-                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-                            color: white;
-                            min-height: 100vh;
-                            margin: 0;
-                            display: flex;
-                            flex-direction: column;
-                            align-items: center;
-                            justify-content: center;
-                        }
-                        .qr-container {
-                            background: white;
-                            padding: 30px;
-                            border-radius: 25px;
-                            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-                            margin: 20px;
-                        }
-                        .qr-container img { width: 400px; max-width: 90vw; }
-                        .info {
-                            background: rgba(255,255,255,0.1);
-                            padding: 25px;
-                            border-radius: 15px;
-                            margin: 30px auto;
-                            max-width: 500px;
-                        }
-                        .atualizando {
-                            color: #ffd700;
-                            animation: pulse 1.5s infinite;
-                            font-weight: bold;
-                        }
-                        @keyframes pulse {
-                            0%, 100% { opacity: 1; }
-                            50% { opacity: 0.7; }
-                        }
-                    </style>
-                </head>
-                <body>
-                    <h1>🎮 ${STORE_NAME}</h1>
-                    <h2>📱 Escaneie o QR Code</h2>
-                    <div class="qr-container">
-                        <img src="${qrCodeDataURL}" alt="QR Code">
-                    </div>
-                    <div class="info">
-                        <p class="atualizando">🔄 Atualizando automaticamente...</p>
-                        <p>1. Abra o WhatsApp no celular</p>
-                        <p>2. Configurações → WhatsApp Web</p>
-                        <p>3. Aponte a câmera para o QR Code</p>
-                    </div>
+                <head><title>QR Code</title><meta http-equiv="refresh" content="5"></head>
+                <body style="text-align:center;background:#1a1a2e;color:white;">
+                    <h1>📱 Escaneie o QR Code</h1>
+                    <img src="${qrCodeDataURL}" style="width:400px;max-width:90%;background:white;padding:20px;border-radius:20px;">
+                    <p>Atualizando automaticamente...</p>
                 </body>
                 </html>
             `);
         } else {
-            res.end(`
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Gerando - ${STORE_NAME}</title>
-                    <meta http-equiv="refresh" content="3">
-                    <style>
-                        body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
-                        .loading { font-size: 28px; animation: pulse 1s infinite; }
-                        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-                    </style>
-                </head>
-                <body>
-                    <h1>⏳ Gerando QR Code...</h1>
-                    <p class="loading">Aguarde...</p>
-                </body>
-                </html>
-            `);
+            res.end(`<html><body style="text-align:center;"><h1>⏳ Gerando...</h1><meta http-equiv="refresh" content="3"></body></html>`);
         }
-    }
-    else if (url === '/api/status') {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({
-            conectado: botConectado,
-            numero: botConectado ? BOT_NUMBER : null,
-            temQR: !!qrCodeDataURL,
-            timestamp: new Date().toISOString()
-        }));
-    }
-    else if (url === '/health') {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
     }
     else {
         res.writeHead(302, { 'Location': '/' });
@@ -229,43 +115,26 @@ const server = http.createServer((req, res) => {
     }
 });
 
-// INICIA SERVIDOR PRIMEIRO
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌐 Servidor web rodando na porta ${PORT}`);
-    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
+    console.log(`🌐 Servidor rodando na porta ${PORT}`);
 });
 
-// Função para atualizar QR Code
 async function atualizarQRCode(qr) {
     try {
         const QRCode = require('qrcode');
-        qrCodeDataURL = await QRCode.toDataURL(qr, {
-            width: 500,
-            margin: 2,
-            color: { dark: '#000000', light: '#FFFFFF' }
-        });
-        console.log('📱 QR Code atualizado na web!');
+        qrCodeDataURL = await QRCode.toDataURL(qr, { width: 500, margin: 2 });
         qrcode.generate(qr, { small: true });
     } catch (err) {
-        console.error('Erro ao gerar QR Code:', err);
+        console.error('Erro QR:', err);
     }
 }
 
-// Função para verificar se é admin (número configurado OU master key usada)
 function verificarAdmin(sender) {
-    const numeroLimpo = sender
-        .replace('@s.whatsapp.net', '')
-        .replace('@g.us', '')
-        .split(':')[0];
-    
-    // Verifica se é o número admin configurado
+    const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
     if (numeroLimpo === ADMIN_NUMBER) return true;
-    
-    // Verifica se este usuário resgatou a master key
     return db.isAdminMaster(numeroLimpo);
 }
 
-// Menus
 function getMenuPrincipal(nome) {
     return `🎮 *${STORE_NAME}*
 
@@ -282,32 +151,11 @@ Olá, ${nome}! 👋
 
 0️⃣ *Falar com Atendente* 💬
 
-_Digite o número da opção desejada_`;
-}
-
-function getMenuTesteExpirado(nome) {
-    return `😢 *${STORE_NAME} - Teste Expirado*
-
-Ei ${nome}, seu teste grátis acabou!
-
-Quer continuar jogando? 🎮
-
-*Escolha uma opção:*
-
-1️⃣ *Comprar Key* 💰
-   • 7 dias: R$ 10
-   • 1 mês: R$ 25
-   • Lifetime: R$ 80
-
-2️⃣ *Falar com Admin* 👑
-
-0️⃣ *Falar com Atendente* 💬
-
-_Digite o número da opção desejada_`;
+_Digite o número da opção_`;
 }
 
 function getMenuAdmin() {
-    return `🔧 *PAINEL ADMIN - ${STORE_NAME}*
+    return `🔧 *PAINEL ADMIN*
 
 *Escolha uma opção:*
 
@@ -318,36 +166,46 @@ function getMenuAdmin() {
 5️⃣ *Estatísticas* 📊
 6️⃣ *Listar Jogos* 📋
 7️⃣ *Broadcast* 📢
-8️⃣ *Entrar em Grupo* 👥
+8️⃣ *Remover Conta* ❌
+9️⃣ *Entrar em Grupo* 👥
 
 0️⃣ *Voltar ao Menu*
 
-_Digite o número da opção_`;
+_Digite o número_`;
 }
 
-// Conectar ao WhatsApp
+// FUNÇÃO PARA CALCULAR TEMPO DE USO
+function calcularTempoUso(dataRegistro) {
+    if (!dataRegistro) return 'Novo usuário';
+    
+    const agora = new Date();
+    const registro = new Date(dataRegistro);
+    const diffMs = agora - registro;
+    
+    const segundos = Math.floor(diffMs / 1000);
+    const minutos = Math.floor(segundos / 60);
+    const horas = Math.floor(minutos / 60);
+    const dias = Math.floor(horas / 24);
+    const meses = Math.floor(dias / 30);
+    const anos = Math.floor(dias / 365);
+    
+    if (anos > 0) return `${anos} ano${anos > 1 ? 's' : ''}`;
+    if (meses > 0) return `${meses} mês${meses > 1 ? 'es' : ''}`;
+    if (dias > 0) return `${dias} dia${dias > 1 ? 's' : ''}`;
+    if (horas > 0) return `${horas} hora${horas > 1 ? 's' : ''}`;
+    if (minutos > 0) return `${minutos} minuto${minutos > 1 ? 's' : ''}`;
+    return 'Agora mesmo';
+}
+
 async function connectToWhatsApp() {
-    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = await import('@whiskeysockets/baileys');
+    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const { version, isLatest } = await fetchLatestBaileysVersion();
     
-    console.log(`📱 Usando Baileys v${version.join('.')}, Latest: ${isLatest}`);
-
     const sock = makeWASocket({
-        version,
         logger: pino({ level: 'silent' }),
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
-        },
-        browser: ['NyuxStore Bot', 'Chrome', '1.0'],
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        keepAliveIntervalMs: 30000,
-        shouldIgnoreJid: jid => false,
-        msgRetryCounterMap: {},
-        defaultQueryTimeoutMs: undefined
+        auth: state,
+        browser: ['NyuxStore Bot', 'Chrome', '1.0']
     });
 
     sockGlobal = sock;
@@ -355,47 +213,32 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        if (qr) {
-            console.log('📱 Novo QR Code recebido!');
-            await atualizarQRCode(qr);
-        }
+        if (qr) await atualizarQRCode(qr);
         
         if (connection === 'close') {
             botConectado = false;
             qrCodeDataURL = null;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
-            if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 5000);
-            }
+            if (shouldReconnect) setTimeout(connectToWhatsApp, 5000);
         } else if (connection === 'open') {
             botConectado = true;
             qrCodeDataURL = null;
-            console.log('✅ Bot conectado ao WhatsApp!');
-            console.log('📱 Número:', sock.user.id.split(':')[0]);
-            console.log('🤖 Nome:', sock.user.name);
+            console.log('✅ Bot conectado!');
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Processar mensagens com controle de duplicatas
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        
         if (!msg.message || msg.key.fromMe) return;
 
         const msgId = msg.key.id;
         const participant = msg.key.participant || msg.key.remoteJid;
         const uniqueId = `${msgId}_${participant}`;
         
-        if (mensagensProcessadas.has(uniqueId)) {
-            console.log('🔄 Mensagem duplicada ignorada:', msgId);
-            return;
-        }
-        
+        if (mensagensProcessadas.has(uniqueId)) return;
         mensagensProcessadas.add(uniqueId);
-        
         if (mensagensProcessadas.size > 1000) {
             const iterator = mensagensProcessadas.values();
             mensagensProcessadas.delete(iterator.next().value);
@@ -406,31 +249,19 @@ async function connectToWhatsApp() {
         const pushName = msg.pushName || 'Cliente';
         
         let text = '';
-        let isMentioned = false;
-        
-        if (msg.message.conversation) {
-            text = msg.message.conversation;
-        } else if (msg.message.extendedTextMessage) {
-            text = msg.message.extendedTextMessage.text;
-            if (msg.message.extendedTextMessage.contextInfo?.mentionedJid) {
-                const mentioned = msg.message.extendedTextMessage.contextInfo.mentionedJid;
-                isMentioned = mentioned.includes(sock.user.id);
-            }
-        } else if (msg.message.buttonsResponseMessage) {
-            text = msg.message.buttonsResponseMessage.selectedButtonId;
-        } else if (msg.message.listResponseMessage) {
-            text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
-        } else if (msg.message.documentMessage) {
-            text = '[documento]';
-        }
+        if (msg.message.conversation) text = msg.message.conversation;
+        else if (msg.message.extendedTextMessage) text = msg.message.extendedTextMessage.text;
+        else if (msg.message.buttonsResponseMessage) text = msg.message.buttonsResponseMessage.selectedButtonId;
+        else if (msg.message.listResponseMessage) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+        else if (msg.message.documentMessage) text = '[documento]';
 
         text = text.toLowerCase().trim();
         
-        console.log(`\n📩 Nova mensagem de ${pushName} (${sender}): "${text}"`);
+        console.log(`\n📩 ${pushName} (${sender}): "${text}"`);
         
         if (isGroup) {
             const isCommand = text.startsWith('!');
-            if (!isMentioned && !isCommand) return;
+            if (!isCommand) return;
             if (isCommand) text = text.substring(1).trim();
         }
 
@@ -442,53 +273,13 @@ async function connectToWhatsApp() {
         try {
             // COMANDO ADMIN
             if (text === 'admin' || text === 'adm') {
-                console.log('🔑 Tentativa de acesso admin. isAdmin:', isAdmin);
-                
                 if (isAdmin) {
-                    console.log('✅ Admin autorizado!');
                     userStates.set(sender, { step: 'admin_menu' });
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
                 } else {
-                    console.log('❌ Acesso negado para:', sender);
-                    await sock.sendMessage(sender, { 
-                        text: '⛔ *Acesso Negado*\n\nVocê não tem permissão.' 
-                    });
+                    await sock.sendMessage(sender, { text: '⛔ *Acesso Negado*' });
                 }
                 return;
-            }
-
-            // COMANDOS DE GRUPO
-            if (isGroup) {
-                if (text === 'menu' || text === 'ajuda') {
-                    await sock.sendMessage(sender, {
-                        text: `🎮 *${STORE_NAME}* - Comandos:\n\n• !menu - Este menu\n• !jogos - Lista de jogos\n• !precos - Preços\n• !comprar - Como comprar\n• !teste - Teste grátis (PV)\n\n💬 Me chame no privado!`
-                    });
-                    return;
-                }
-                if (text === 'jogos') {
-                    const jogos = db.getJogosDisponiveisPorCategoria();
-                    let msg = '📋 *Jogos:*\n\n';
-                    let total = 0;
-                    for (const [cat, lista] of Object.entries(jogos).slice(0, 3)) {
-                        msg += `${cat}: ${lista.length} jogos\n`;
-                        total += lista.length;
-                    }
-                    msg += `\n🎮 Total: ${total} jogos\n\n💬 Chame no PV: +${BOT_NUMBER}`;
-                    await sock.sendMessage(sender, { text: msg });
-                    return;
-                }
-                if (text === 'precos') {
-                    await sock.sendMessage(sender, {
-                        text: `💰 *Preços:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n📱 +${BOT_NUMBER}`
-                    });
-                    return;
-                }
-                if (text === 'comprar' || text === 'teste') {
-                    await sock.sendMessage(sender, {
-                        text: `👋 ${pushName}, me chame no privado!\n\n📱 wa.me/${BOT_NUMBER}\n\nPara usar o teste grátis!`
-                    });
-                    return;
-                }
             }
 
             // MENU PRINCIPAL
@@ -498,11 +289,9 @@ async function connectToWhatsApp() {
                         await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +${ADMIN_NUMBER}` });
                     } else if (text === '2') {
                         await sock.sendMessage(sender, { text: '👑 Chamando admin...' });
-                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\n${pushName}\n${sender.replace('@s.whatsapp.net', '').split(':')[0]}\nStatus: Teste expirado!`
-                        });
+                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `🚨 CLIENTE QUER COMPRAR!\n\n${pushName}\n${sender.replace('@s.whatsapp.net', '').split(':')[0]}` });
                     } else {
-                        await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
+                        await sock.sendMessage(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
                     }
                     return;
                 }
@@ -511,7 +300,7 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +${ADMIN_NUMBER}` });
                 } else if (text === '2') {
                     userStates.set(sender, { step: 'resgatar_key' });
-                    await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_\n\n🔐 *Key de Admin disponível!*\nUse: *NYUX-ADM1-GUIXS23* (1 uso apenas!)' });
+                    await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
                 } else if (text === '3') {
                     if (!db.verificarAcesso(sender)) {
                         await sock.sendMessage(sender, { text: '❌ Precisa de key! Digite 2 ou 6' });
@@ -538,80 +327,87 @@ async function connectToWhatsApp() {
                     let total = 0;
                     for (const [cat, lista] of Object.entries(jogos)) {
                         msg += `${cat} (${lista.length})\n`;
-                        lista.forEach((j, i) => msg += `   ${i + 1}. ${j.jogo}\n`);
+                        lista.forEach((j, i) => msg += `    ${i + 1}. ${j.jogo}\n`);
                         total += lista.length;
                     }
                     msg += `\n🎮 Total: ${total}`;
                     await sock.sendMessage(sender, { text: msg });
                 } else if (text === '5') {
+                    // PERFIL ATUALIZADO COM NOME, JOGOS RESGATADOS E TEMPO DE USO
                     const p = db.getPerfil(sender);
                     const numLimpo = sender.replace('@s.whatsapp.net', '').split(':')[0];
-                    let msg = `👤 *Perfil*\n📱 ${numLimpo}\n⏱️ ${p.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n🎮 Jogos: ${p.totalResgatados}`;
-                    if (p.keyInfo) msg += `\n🔑 ${p.keyInfo.key}\n📅 ${p.keyInfo.expira}`;
-                    if (p.usouTeste && !p.temAcesso) msg += `\n\n😢 Teste expirou!`;
+                    
+                    // Calcula tempo de uso
+                    const tempoUso = calcularTempoUso(p.dataRegistro);
+                    
+                    // Conta quantos jogos diferentes ele resgatou (baseado nas keys)
+                    const jogosResgatados = p.keysResgatadas ? p.keysResgatadas.length : 0;
+                    
+                    let msg = `👤 *MEU PERFIL*\n\n`;
+                    msg += `🪪 *Nome:* ${p.nome || pushName}\n`;
+                    msg += `📱 *Número:* ${numLimpo}\n`;
+                    msg += `⏱️ *Status:* ${p.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
+                    msg += `🎮 *Keys Resgatadas:* ${jogosResgatados}\n`;
+                    msg += `📅 *Cliente há:* ${tempoUso}\n`;
+                    
+                    if (p.keyInfo) {
+                        msg += `\n🔑 *Última Key:* ${p.keyInfo.key}\n`;
+                        msg += `📆 *Expira:* ${p.keyInfo.expira}\n`;
+                    }
+                    
+                    if (p.usouTeste && !p.temAcesso) {
+                        msg += `\n😢 *Seu teste expirou!*\nCompre uma key para continuar.`;
+                    }
+                    
+                    if (p.acessoPermanente) {
+                        msg += `\n👑 *Você é Admin Premium!* 🌟`;
+                    }
+                    
                     await sock.sendMessage(sender, { text: msg });
+                    
                 } else if (text === '6') {
                     userStates.set(sender, { step: 'resgatar_key_teste' });
                     await sock.sendMessage(sender, { text: '🎉 *Teste Grátis*\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ Só 1 por pessoa!\n\nDigite:' });
                 } else if (text === '0') {
                     await sock.sendMessage(sender, { text: '💬 Aguarde...' });
-                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { 
-                        text: `📩 ${pushName}\n${sender.replace('@s.whatsapp.net', '').split(':')[0]}` 
-                    });
+                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 ${pushName}\n${sender.replace('@s.whatsapp.net', '').split(':')[0]}` });
                 } else {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
-            // RESGATAR KEY - CORRIGIDO COM MASTER KEY!
+            // RESGATAR KEY
             else if (userState.step === 'resgatar_key') {
                 const key = text.toUpperCase().replace(/\s/g, '');
                 
-                console.log('🔑 Tentativa de resgatar key:', key);
-                
-                // Verifica se é a MASTER KEY DE ADMIN (Uso único!)
                 if (key === ADMIN_MASTER_KEY) {
-                    console.log('🚨 MASTER KEY DETECTADA!');
-                    
                     const resultado = db.resgatarMasterKey(key, sender, pushName);
-                    
                     if (resultado.sucesso) {
                         userStates.set(sender, { step: 'menu' });
                         await sock.sendMessage(sender, { 
-                            text: `👑 *MASTER KEY ATIVADA!*\n\n🎉 Parabéns ${pushName}!\nVocê agora é um ADMINISTRADOR PERMANENTE!\n\n⚠️ Esta key foi bloqueada permanentemente.\nNinguém mais poderá usá-la.\n\n🔧 Acesse o painel admin digitando: *admin*` 
+                            text: `👑 *MASTER KEY ATIVADA!*\n\n🎉 Parabéns ${pushName}!\nVocê agora é ADMINISTRADOR PERMANENTE!\n\n⚠️ Esta key foi bloqueada.\n\n🔧 Digite: *admin*` 
                         });
-                        
-                        // Notifica o admin original
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `🚨 *ALERTA: MASTER KEY USADA!*\n\n👤 Usuário: ${pushName}\n📱 Número: ${sender.replace('@s.whatsapp.net', '').split(':')[0]}\n🔐 Key: ${key}\n⏰ Data: ${new Date().toLocaleString()}\n\n✅ Este usuário agora tem acesso de admin!`
+                            text: `🚨 *MASTER KEY USADA!*\n\n👤 ${pushName}\n📱 ${sender.replace('@s.whatsapp.net', '').split(':')[0]}\n⏰ ${new Date().toLocaleString()}`
                         });
                     } else {
-                        await sock.sendMessage(sender, { 
-                            text: `❌ *${resultado.erro}*\n\nEsta key já foi usada ou está bloqueada.` 
-                        });
+                        await sock.sendMessage(sender, { text: `❌ *${resultado.erro}*` });
                     }
                     return;
                 }
                 
-                // Valida formato de key normal
                 if (!key.match(/^NYUX-[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
-                    await sock.sendMessage(sender, { 
-                        text: '❌ *Formato inválido!*\n\nA key deve estar no formato:\n*NYUX-XXXX-XXXX*\n\n_Tente novamente ou digite *menu* para cancelar._' 
-                    });
+                    await sock.sendMessage(sender, { text: '❌ *Formato inválido!*\n\nFormato: *NYUX-XXXX-XXXX*' });
                     return;
                 }
                 
-                // Tenta resgatar key normal
                 const resultado = db.resgatarKey(key, sender, pushName);
-                
                 if (resultado.sucesso) {
                     userStates.set(sender, { step: 'menu' });
                     await sock.sendMessage(sender, { 
-                        text: `✅ *Key Resgatada com Sucesso!*\n\n🎆 Plano: ${resultado.plano}\n⏱️ Duração: ${resultado.duracao}\n📅 Expira em: ${resultado.expira}\n\n🎮 Agora você tem acesso a todos os jogos!\n\n_Digite *menu* para ver as opções._` 
+                        text: `✅ *Key Resgatada!*\n\n🎆 Plano: ${resultado.plano}\n⏱️ Duração: ${resultado.duracao}\n📅 Expira: ${resultado.expira}\n\n🎮 Acesso liberado!` 
                     });
                 } else {
-                    await sock.sendMessage(sender, { 
-                        text: `❌ *Erro ao resgatar key*\n\n${resultado.erro}\n\n_Tente novamente ou digite *menu* para cancelar._` 
-                    });
+                    await sock.sendMessage(sender, { text: `❌ *Erro:* ${resultado.erro}` });
                 }
             }
             // TESTE GRÁTIS
@@ -664,10 +460,10 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: '🎁 Teste:\n1️⃣ 1h\n2️⃣ 2h\n3️⃣ 6h' });
                 } else if (text === '4') {
                     userStates.set(sender, { step: 'admin_importar' });
-                    await sock.sendMessage(sender, { text: '📄 Envie .txt:' });
+                    await sock.sendMessage(sender, { text: '📄 Envie o arquivo .txt com as contas' });
                 } else if (text === '5') {
                     const s = db.getEstatisticas();
-                    await sock.sendMessage(sender, { text: `📊 Estatísticas:\n🎮 ${s.totalJogos} jogos\n✅ ${s.disponiveis} disponíveis\n🔑 ${s.keysAtivas} keys\n👥 ${s.totalClientes} clientes` });
+                    await sock.sendMessage(sender, { text: `📊 Estatísticas:\n🎮 ${s.totalJogos} jogos\n✅ ${s.disponiveis} disponíveis\n🔑 ${s.keysAtivas} keys\n👥 ${s.totalClientes} clientes\n🔐 Master Key: ${s.masterKeyUsada}` });
                 } else if (text === '6') {
                     const jogos = db.getTodosJogosDisponiveis();
                     let msg = '📋 Jogos:\n\n';
@@ -677,14 +473,70 @@ async function connectToWhatsApp() {
                     userStates.set(sender, { step: 'admin_broadcast' });
                     await sock.sendMessage(sender, { text: '📢 Digite a mensagem:' });
                 } else if (text === '8') {
-                    await sock.sendMessage(sender, {
-                        text: `👥 *Entrar em Grupo*\n\n1️⃣ Adicione +${BOT_NUMBER} no grupo\n2️⃣ Dê permissão de ADMIN\n3️⃣ Digite !menu no grupo\n\n⚠️ O bot só responde comandos com ! no grupo`
+                    userStates.set(sender, { step: 'admin_remover_lista', tempLista: db.getTodosJogosDisponiveis() });
+                    const jogos = db.getTodosJogosDisponiveis();
+                    let msg = '❌ *Remover Conta*\n\n';
+                    jogos.slice(0, 20).forEach((j, i) => {
+                        msg += `${i + 1}. ${j.jogo}\n`;
                     });
+                    if (jogos.length > 20) msg += `\n...e mais ${jogos.length - 20} jogos\n`;
+                    msg += '\nDigite o número da conta para remover\nou digite o nome do jogo:';
+                    await sock.sendMessage(sender, { text: msg });
+                } else if (text === '9') {
+                    await sock.sendMessage(sender, { text: `👥 *Entrar em Grupo*\n\n1️⃣ Adicione +${BOT_NUMBER} no grupo\n2️⃣ Dê permissão de ADMIN\n3️⃣ Digite !menu no grupo` });
                 } else if (text === '0' || text === 'menu') {
                     userStates.set(sender, { step: 'menu' });
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 } else {
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
+                }
+            }
+            // ADMIN: REMOVER CONTA
+            else if (userState.step === 'admin_remover_lista' && isAdmin) {
+                const escolha = parseInt(text);
+                const lista = userState.tempLista || db.getTodosJogosDisponiveis();
+                
+                if (!isNaN(escolha) && escolha > 0 && escolha <= lista.length) {
+                    const conta = lista[escolha - 1];
+                    userStates.set(sender, { 
+                        step: 'admin_remover_confirmar', 
+                        tempConta: conta,
+                        tempLista: lista 
+                    });
+                    await sock.sendMessage(sender, { 
+                        text: `❌ *Confirmar remoção?*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\nDigite *sim* para confirmar ou *não* para cancelar:` 
+                    });
+                } else {
+                    const resultado = db.buscarConta(text);
+                    if (resultado) {
+                        userStates.set(sender, { 
+                            step: 'admin_remover_confirmar', 
+                            tempConta: resultado,
+                            tempLista: lista 
+                        });
+                        await sock.sendMessage(sender, { 
+                            text: `❌ *Confirmar remoção?*\n\n🎮 ${resultado.jogo}\n👤 ${resultado.login}\n\nDigite *sim* para confirmar ou *não* para cancelar:` 
+                        });
+                    } else {
+                        await sock.sendMessage(sender, { text: '❌ Conta não encontrada. Digite o número ou nome correto:' });
+                    }
+                }
+            }
+            else if (userState.step === 'admin_remover_confirmar' && isAdmin) {
+                if (text === 'sim' || text === 's') {
+                    const conta = userState.tempConta;
+                    const resultado = db.removerConta(conta.jogo, conta.login);
+                    if (resultado.sucesso) {
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await sock.sendMessage(sender, { 
+                            text: `✅ *Conta removida!*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\nTotal restante: ${resultado.totalRestante} contas` 
+                        });
+                    } else {
+                        await sock.sendMessage(sender, { text: `❌ Erro: ${resultado.erro}` });
+                    }
+                } else {
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await sock.sendMessage(sender, { text: '✅ Cancelado. Voltando ao menu admin...' });
                 }
             }
             // ADMIN: ADICIONAR CONTA
@@ -693,13 +545,13 @@ async function connectToWhatsApp() {
                 temp.jogo = text;
                 userStates.set(sender, { step: 'admin_add_cat', tempConta: temp });
                 
-                const cats = ['🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games', '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red', '🚜 Simuladores', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação/Aventura'];
+                const cats = ['🗡️ Assassins Creed', '🔫 Call of Duty', '🧟 Resident Evil', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games', '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red', '🚜 Simuladores', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação/Aventura'];
                 let msg = '➕ Escolha categoria:\n\n';
                 cats.forEach((c, i) => msg += `${i + 1}. ${c}\n`);
                 await sock.sendMessage(sender, { text: msg });
             }
             else if (userState.step === 'admin_add_cat' && isAdmin) {
-                const cats = ['🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games', '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red', '🚜 Simuladores', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação/Aventura'];
+                const cats = ['🗡️ Assassins Creed', '🔫 Call of Duty', '🧟 Resident Evil', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games', '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red', '🚜 Simuladores', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação/Aventura'];
                 const escolha = parseInt(text) - 1;
                 if (escolha >= 0 && escolha < cats.length) {
                     const temp = userState.tempConta || {};
@@ -758,10 +610,10 @@ async function connectToWhatsApp() {
                     text: `🎁 *Key Teste!*\n\n${key}\n⏱️ ${duracao}\n\nEnvie para o cliente!`
                 });
             }
-            // ADMIN: IMPORTAR
+            // ADMIN: IMPORTAR TXT
             else if (userState.step === 'admin_importar' && isAdmin) {
                 if (msg.message.documentMessage) {
-                    await sock.sendMessage(sender, { text: '⏳ Processando...' });
+                    await sock.sendMessage(sender, { text: '⏳ Processando arquivo...' });
                     try {
                         const stream = await sock.downloadContentFromMessage(msg.message.documentMessage, 'document');
                         let buffer = Buffer.from([]);
@@ -769,16 +621,26 @@ async function connectToWhatsApp() {
                             buffer = Buffer.concat([buffer, chunk]);
                         }
                         const texto = buffer.toString('utf-8');
-                        const resultado = db.importarTXT(texto);
+                        
+                        const resultado = db.importarTXTInteligente(texto);
+                        
                         userStates.set(sender, { step: 'admin_menu' });
-                        await sock.sendMessage(sender, {
-                            text: `✅ *Importado!*\n\n📊 ${resultado.adicionadas} contas\n🎮 ${resultado.jogosUnicos} jogos\n📂 ${resultado.categorias} categorias`
-                        });
+                        
+                        if (resultado.sucesso && resultado.adicionadas > 0) {
+                            await sock.sendMessage(sender, {
+                                text: `✅ *Importação Concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categoriasDetectadas} categorias\n\n⚠️ ${resultado.ignoradas} entradas ignoradas\n❌ ${resultado.erros} erros\n\nAs contas foram adicionadas 1 por 1 em ordem!`
+                            });
+                        } else {
+                            await sock.sendMessage(sender, { 
+                                text: `⚠️ Nenhuma conta foi adicionada.\n\nPossíveis causas:\n• Formato do arquivo não reconhecido\n• Todas as contas já existem\n• Erro de parsing\n\nTente verificar o formato do arquivo.` 
+                            });
+                        }
                     } catch (err) {
-                        await sock.sendMessage(sender, { text: '❌ Erro no arquivo.' });
+                        console.error('Erro importação:', err);
+                        await sock.sendMessage(sender, { text: '❌ Erro ao processar arquivo. Verifique se é um arquivo .txt válido.' });
                     }
                 } else {
-                    await sock.sendMessage(sender, { text: '📄 Envie o .txt:' });
+                    await sock.sendMessage(sender, { text: '📄 Envie o arquivo .txt:' });
                 }
             }
             // ADMIN: BROADCAST
@@ -806,20 +668,19 @@ async function connectToWhatsApp() {
                 userStates.set(sender, { step: 'menu' });
                 const perfilAtual = db.getPerfil(sender);
                 if (perfilAtual.usouTeste && !perfilAtual.temAcesso && !isAdmin) {
-                    await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
+                    await sock.sendMessage(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
                 } else {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
 
         } catch (error) {
-            console.error('❌ Erro ao processar mensagem:', error);
+            console.error('❌ Erro:', error);
         }
     });
 
     return sock;
 }
 
-// Iniciar
 console.log('🚀 Iniciando NyuxStore...');
 connectToWhatsApp();
