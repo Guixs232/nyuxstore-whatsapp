@@ -1,5 +1,4 @@
 const pino = require('pino');
-const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const Database = require('./database');
 const moment = require('moment');
@@ -82,25 +81,6 @@ _Digite o número da opção_
 `;
 }
 
-// Salvar QR Code como arquivo
-async function salvarQRCode(qr) {
-    try {
-        const QRCode = require('qrcode');
-        await QRCode.toFile('/app/qr-code.png', qr, {
-            color: {
-                dark: '#000000',
-                light: '#FFFFFF'
-            },
-            width: 500,
-            margin: 2
-        });
-        console.log('📱 QR Code salvo em: /app/qr-code.png');
-        console.log('🔗 Baixe o arquivo qr-code.png do servidor e escaneie!');
-    } catch (err) {
-        console.error('Erro ao salvar QR Code:', err);
-    }
-}
-
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
     // Importa Baileys dinamicamente (ES Module)
@@ -123,30 +103,69 @@ async function connectToWhatsApp() {
         shouldIgnoreJid: jid => false
     });
 
+    // Variável para controlar se já enviou QR
+    let qrEnviado = false;
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        if (qr) {
-            console.log('📱 Novo QR Code gerado!');
-            // Salva como imagem
-            await salvarQRCode(qr);
-            // Também mostra no terminal como backup
-            qrcode.generate(qr, { small: true });
+        if (qr && !qrEnviado) {
+            qrEnviado = true;
+            console.log('📱 Gerando QR Code...');
+            
+            try {
+                const QRCode = require('qrcode');
+                const path = '/app/qr-code.png';
+                
+                // Gera imagem do QR Code
+                await QRCode.toFile(path, qr, {
+                    color: {
+                        dark: '#000000',
+                        light: '#FFFFFF'
+                    },
+                    width: 600,
+                    margin: 3
+                });
+                
+                console.log('✅ QR Code gerado!');
+                console.log('📤 Enviando para o admin...');
+                
+                // Espera 2 segundos para garantir que o socket está pronto
+                await delay(2000);
+                
+                // Envia para o admin
+                await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                    image: { url: path },
+                    caption: '📱 *QR Code para conectar o bot!*\n\nEscaneie agora para ativar o NyuxStore Bot\n\n⏰ Válido por 60 segundos'
+                });
+                
+                console.log('✅ QR Code enviado para +', ADMIN_NUMBER);
+                console.log('📱 Verifique seu WhatsApp!');
+                
+                // Remove o arquivo depois de 60 segundos
+                setTimeout(() => {
+                    if (fs.existsSync(path)) {
+                        fs.unlinkSync(path);
+                        console.log('🗑️ QR Code removido');
+                    }
+                    qrEnviado = false;
+                }, 60000);
+                
+            } catch (err) {
+                console.error('❌ Erro ao enviar QR:', err);
+                console.log('🔧 Tente reiniciar o deploy');
+            }
         }
         
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
+            qrEnviado = false;
             if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
             console.log('✅ Bot conectado ao WhatsApp!');
             console.log('📱 Número:', sock.user.id.split(':')[0]);
             console.log('🤖 Nome:', sock.user.name);
-            // Remove o arquivo QR se existir
-            if (fs.existsSync('/app/qr-code.png')) {
-                fs.unlinkSync('/app/qr-code.png');
-                console.log('🗑️ QR Code removido (conectado)');
-            }
         }
     });
 
@@ -204,7 +223,6 @@ async function connectToWhatsApp() {
                 const comandosValidos = ['1', '2', '3', '4', '5', '6', '0', 'menu', 'admin', 'voltar', 'oi', 'ola', 'olá', 'hey', 'eai', 'eae'];
                 
                 if (!comandosValidos.includes(text) && userState.step === 'menu') {
-                    // Se teste expirou, mostra menu especial
                     if (testeExpirado && !isAdmin) {
                         await sock.sendMessage(sender, {
                             text: `Olá! 👋 Não entendi.\n\n${getMenuTesteExpirado(pushName)}`
@@ -221,7 +239,6 @@ async function connectToWhatsApp() {
             // MENU PRINCIPAL OU MENU TESTE EXPIRADO
             if (userState.step === 'menu') {
                 
-                // Se teste expirou, mostra menu especial (exceto para admin)
                 if (testeExpirado && !isAdmin) {
                     
                     if (text === '1' || text.includes('comprar')) {
@@ -230,17 +247,14 @@ async function connectToWhatsApp() {
                         });
 
                     } else if (text === '2' || text.includes('admin') || text.includes('falar')) {
-                        // Chama admin no privado
                         await sock.sendMessage(sender, {
                             text: `👑 *Chamando Admin...*\n\nAguarde, estou te conectando com o admin!`
                         });
                         
-                        // Notifica admin
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
                             text: `🚨 *CLIENTE QUER COMPRAR!*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: *Teste expirado, quer comprar key!*\n\n💬 Responda aqui para negociar.`
                         });
                         
-                        // Envia contato do cliente para o admin
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
                             contacts: {
                                 displayName: pushName,
@@ -271,10 +285,10 @@ async function connectToWhatsApp() {
                         });
                     }
                     
-                    return; // Sai aqui para não executar o menu normal
+                    return;
                 }
 
-                // MENU NORMAL (quem tem acesso ou nunca usou teste)
+                // MENU NORMAL
                 if (text === '1' || text.includes('comprar')) {
                     await sock.sendMessage(sender, {
                         text: `💳 *Comprar Key*\n\nPara comprar uma key, faça o pagamento via:\n\n• Pix\n• Transferência\n• Cartão\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
@@ -295,7 +309,6 @@ async function connectToWhatsApp() {
                         return;
                     }
                     
-                    // Mostra lista de jogos disponíveis por categoria primeiro
                     const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
                     let msg = '🎮 *Jogos Disponíveis*\n\n';
                     
@@ -337,7 +350,6 @@ async function connectToWhatsApp() {
                     msg += `🎮 *Total: ${totalJogos} jogos disponíveis*\n\n`;
                     msg += '💡 Para resgatar uma conta, use a opção *3 - Buscar Jogo*';
                     
-                    // Divide em partes se for muito grande
                     if (msg.length > 4000) {
                         const partes = msg.match(/[\s\S]{1,4000}/g) || [msg];
                         for (let i = 0; i < partes.length; i++) {
@@ -362,7 +374,6 @@ async function connectToWhatsApp() {
                     
                     msg += `\n🎮 Jogos resgatados: ${perfilUser.totalResgatados}`;
                     
-                    // Se teste expirado, avisa
                     if (perfilUser.usouTeste && !perfilUser.temAcesso) {
                         msg += `\n\n😢 *Seu teste expirou!*\nDigite *menu* para ver opções de compra.`;
                     }
@@ -428,7 +439,6 @@ async function connectToWhatsApp() {
                     return;
                 }
                 
-                // Verifica se já usou teste
                 const jaUsouTeste = db.verificarTesteUsado(sender);
                 if (jaUsouTeste) {
                     userStates.set(sender, { step: 'menu' });
@@ -457,7 +467,7 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // BUSCAR JOGO - NÃO MARCA COMO USADA (CONTAS ILIMITADAS)
+            // BUSCAR JOGO
             else if (userState.step === 'buscar_jogo') {
                 const conta = db.buscarConta(text);
                 
@@ -546,7 +556,7 @@ async function connectToWhatsApp() {
                 }
             }
 
-            // ADMIN: ADICIONAR CONTA - PASSO 1 (NOME)
+            // ADMIN: ADICIONAR CONTA - PASSOS
             else if (userState.step === 'admin_add_conta_nome' && isAdmin) {
                 userStates.set(sender, { 
                     step: 'admin_add_conta_categoria',
@@ -554,60 +564,33 @@ async function connectToWhatsApp() {
                 });
                 
                 const categorias = [
-                    '🗡️ Assassin\'s Creed',
-                    '🔫 Call of Duty',
-                    '🧟 Resident Evil',
-                    '⚽ Esportes',
-                    '🏎️ Corrida',
-                    '🚗 Rockstar Games',
-                    '🦸 Super-Heróis',
-                    '⚔️ Soulslike',
-                    '🐺 CD Projekt Red',
-                    '🚜 Simuladores',
-                    '👻 Terror',
-                    '🎲 RPG',
-                    '🥊 Luta',
-                    '🕵️ Stealth',
-                    '🧠 Estratégia',
-                    '🌲 Survival',
-                    '🍄 Nintendo',
-                    '💙 Sega',
-                    '💣 Guerra',
-                    '🎮 Ação/Aventura'
+                    '🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil',
+                    '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games',
+                    '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red',
+                    '🚜 Simuladores', '👻 Terror', '🎲 RPG',
+                    '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia',
+                    '🌲 Survival', '🍄 Nintendo', '💙 Sega',
+                    '💣 Guerra', '🎮 Ação/Aventura'
                 ];
                 
                 let msg = '➕ *Adicionar Conta - Passo 2/4*\n\nEscolha a *CATEGORIA*:\n\n';
                 categorias.forEach((cat, index) => {
                     msg += `${index + 1}. ${cat}\n`;
                 });
-                msg += '\nDigite o número da categoria:';
+                msg += '\nDigite o número:';
                 
                 await sock.sendMessage(sender, { text: msg });
             }
 
-            // ADMIN: ADICIONAR CONTA - PASSO 2 (CATEGORIA)
             else if (userState.step === 'admin_add_conta_categoria' && isAdmin) {
                 const categorias = [
-                    '🗡️ Assassin\'s Creed',
-                    '🔫 Call of Duty',
-                    '🧟 Resident Evil',
-                    '⚽ Esportes',
-                    '🏎️ Corrida',
-                    '🚗 Rockstar Games',
-                    '🦸 Super-Heróis',
-                    '⚔️ Soulslike',
-                    '🐺 CD Projekt Red',
-                    '🚜 Simuladores',
-                    '👻 Terror',
-                    '🎲 RPG',
-                    '🥊 Luta',
-                    '🕵️ Stealth',
-                    '🧠 Estratégia',
-                    '🌲 Survival',
-                    '🍄 Nintendo',
-                    '💙 Sega',
-                    '💣 Guerra',
-                    '🎮 Ação/Aventura'
+                    '🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil',
+                    '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games',
+                    '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red',
+                    '🚜 Simuladores', '👻 Terror', '🎲 RPG',
+                    '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia',
+                    '🌲 Survival', '🍄 Nintendo', '💙 Sega',
+                    '💣 Guerra', '🎮 Ação/Aventura'
                 ];
                 
                 const escolha = parseInt(text) - 1;
@@ -622,16 +605,15 @@ async function connectToWhatsApp() {
                     });
                     
                     await sock.sendMessage(sender, {
-                        text: '➕ *Adicionar Conta - Passo 3/4*\n\nDigite o *LOGIN* (usuário/email):'
+                        text: '➕ *Adicionar Conta - Passo 3/4*\n\nDigite o *LOGIN*:'
                     });
                 } else {
                     await sock.sendMessage(sender, {
-                        text: '❌ Opção inválida. Digite um número de 1 a 20:'
+                        text: '❌ Opção inválida. Digite 1-20:'
                     });
                 }
             }
 
-            // ADMIN: ADICIONAR CONTA - PASSO 3 (LOGIN)
             else if (userState.step === 'admin_add_conta_login' && isAdmin) {
                 const temp = userState.tempConta || {};
                 temp.login = text;
@@ -646,7 +628,6 @@ async function connectToWhatsApp() {
                 });
             }
 
-            // ADMIN: ADICIONAR CONTA - PASSO 4 (SENHA)
             else if (userState.step === 'admin_add_conta_senha' && isAdmin) {
                 const temp = userState.tempConta || {};
                 temp.senha = text;
@@ -656,7 +637,7 @@ async function connectToWhatsApp() {
                 userStates.set(sender, { step: 'admin_menu' });
                 
                 await sock.sendMessage(sender, {
-                    text: `✅ *Conta adicionada com sucesso!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}\n\n✅ Conta compartilhada - todos podem usar!\n\nDigite *menu* para voltar ao painel admin.`
+                    text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}\n\nDigite *menu* para voltar.`
                 });
             }
 
@@ -668,20 +649,17 @@ async function connectToWhatsApp() {
                 else if (text === '2') { duracao = '1 mês'; dias = 30; }
                 else if (text === '3') { duracao = 'Lifetime'; dias = 99999; }
                 else {
-                    await sock.sendMessage(sender, { text: '❌ Opção inválida. Digite 1, 2 ou 3:' });
+                    await sock.sendMessage(sender, { text: '❌ Digite 1, 2 ou 3:' });
                     return;
                 }
                 
-                const prefixo = 'NYUX';
-                const sufixo = Math.random().toString(36).substring(2, 10).toUpperCase();
-                const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
-                const key = `${prefixo}-${meio}-${sufixo}`;
+                const key = `NYUX-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
                 
                 db.criarKey(key, duracao, dias);
                 userStates.set(sender, { step: 'admin_menu' });
                 
                 await sock.sendMessage(sender, {
-                    text: `🔑 *Key Gerada!*\n\n*Key:* ${key}\n*Duração:* ${duracao}\n*Status:* ✅ Ativa\n\nCopie e envie para o cliente.`
+                    text: `🔑 *Key Gerada!*\n\n*Key:* ${key}\n*Duração:* ${duracao}\n\nCopie e envie ao cliente.`
                 });
             }
 
@@ -693,27 +671,24 @@ async function connectToWhatsApp() {
                 else if (text === '2') { duracao = '2 horas'; horas = 2; }
                 else if (text === '3') { duracao = '6 horas'; horas = 6; }
                 else {
-                    await sock.sendMessage(sender, { text: '❌ Opção inválida. Digite 1, 2 ou 3:' });
+                    await sock.sendMessage(sender, { text: '❌ Digite 1, 2 ou 3:' });
                     return;
                 }
                 
-                const prefixo = 'TESTE';
-                const sufixo = Math.random().toString(36).substring(2, 8).toUpperCase();
-                const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
-                const key = `${prefixo}-${meio}-${sufixo}`;
+                const key = `TESTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
                 
                 db.criarKey(key, duracao, horas, true);
                 userStates.set(sender, { step: 'admin_menu' });
                 
                 await sock.sendMessage(sender, {
-                    text: `🎁 *Key Teste Gerada (Admin)!*\n\n*Key:* ${key}\n*Duração:* ${duracao}\n*Status:* ✅ Ativa\n\nEnvie para o cliente testar.`
+                    text: `🎁 *Key Teste!*\n\n*Key:* ${key}\n*Duração:* ${duracao}`
                 });
             }
 
             // ADMIN: IMPORTAR TXT
             else if (userState.step === 'admin_importar' && isAdmin) {
                 if (msg.message.documentMessage) {
-                    await sock.sendMessage(sender, { text: '⏳ Processando arquivo...' });
+                    await sock.sendMessage(sender, { text: '⏳ Processando...' });
                     
                     try {
                         const stream = await sock.downloadContentFromMessage(msg.message.documentMessage, 'document');
@@ -723,24 +698,19 @@ async function connectToWhatsApp() {
                             buffer = Buffer.concat([buffer, chunk]);
                         }
                         
-                        const texto = buffer.toString('utf-8');
-                        const resultado = db.importarTXT(texto);
+                        const resultado = db.importarTXT(buffer.toString('utf-8'));
                         
                         userStates.set(sender, { step: 'admin_menu' });
                         
                         await sock.sendMessage(sender, {
-                            text: `✅ *Importação Concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categorias} categorias\n❌ ${resultado.erros} erros\n\n✅ Todas as contas são compartilhadas (ilimitadas)!\n\nResumo por categoria:\n${resultado.resumoCategorias}`
+                            text: `✅ *Importado!*\n\n📊 ${resultado.adicionadas} contas\n🎮 ${resultado.jogosUnicos} jogos\n📂 ${resultado.categorias} categorias`
                         });
                         
                     } catch (err) {
-                        await sock.sendMessage(sender, {
-                            text: '❌ Erro ao processar arquivo. Certifique-se de que é um .txt válido.'
-                        });
+                        await sock.sendMessage(sender, { text: '❌ Erro no arquivo.' });
                     }
                 } else {
-                    await sock.sendMessage(sender, {
-                        text: '📄 Aguardando arquivo .txt...\n\nEnvie o arquivo com as contas.'
-                    });
+                    await sock.sendMessage(sender, { text: '📄 Envie o arquivo .txt' });
                 }
             }
 
@@ -749,49 +719,40 @@ async function connectToWhatsApp() {
                 const clientes = db.getTodosClientes();
                 let enviados = 0;
                 
-                await sock.sendMessage(sender, {
-                    text: `📢 Enviando para ${clientes.length} clientes...`
-                });
-                
                 for (const cliente of clientes) {
                     try {
                         await sock.sendMessage(cliente.numero, {
-                            text: `📢 *Mensagem da NyuxStore*\n\n${text}\n\n_Digite menu para ver opções_`
+                            text: `📢 *NyuxStore*\n\n${text}`
                         });
                         enviados++;
-                        await delay(1000);
+                        await delay(500);
                     } catch (e) {
-                        console.log('Erro ao enviar para:', cliente.numero);
+                        console.log('Erro:', cliente.numero);
                     }
                 }
                 
                 userStates.set(sender, { step: 'admin_menu' });
                 await sock.sendMessage(sender, {
-                    text: `✅ *Broadcast enviado!*\n\n📤 ${enviados}/${clientes.length} mensagens entregues.`
+                    text: `✅ Enviado para ${enviados}/${clientes.length} clientes`
                 });
             }
 
-            // COMANDO MENU (qualquer momento)
+            // COMANDO MENU
             if (text === 'menu' || text === 'voltar') {
                 userStates.set(sender, { step: 'menu' });
                 
-                // Verifica se teste expirou para mostrar menu correto
                 const perfilAtual = db.getPerfil(sender);
                 if (perfilAtual.usouTeste && !perfilAtual.temAcesso && !isAdmin) {
-                    await sock.sendMessage(sender, { 
-                        text: getMenuTesteExpirado(pushName)
-                    });
+                    await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
                 } else {
-                    await sock.sendMessage(sender, { 
-                        text: getMenuPrincipal(pushName)
-                    });
+                    await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
 
         } catch (error) {
             console.error('Erro:', error);
             await sock.sendMessage(sender, {
-                text: '❌ Ocorreu um erro. Digite *menu* para recomeçar.'
+                text: '❌ Erro. Digite *menu* para recomeçar.'
             });
         }
     });
@@ -799,8 +760,6 @@ async function connectToWhatsApp() {
     return sock;
 }
 
-// Iniciar
-console.log('🚀 Iniciando NyuxStore WhatsApp...');
-console.log('🤖 Bot Number:', BOT_NUMBER);
-console.log('👑 Admin Number:', ADMIN_NUMBER);
+console.log('🚀 Iniciando NyuxStore...');
+console.log('📱 Aguarde o QR Code no WhatsApp:', ADMIN_NUMBER);
 connectToWhatsApp();
