@@ -9,7 +9,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
     "qrcode-terminal": "^0.12.0",
-    "better-sqlite3": "^9.4.3",
+    "sqlite3": "^5.1.6",
     "pino": "^8.19.0",
     "fs-extra": "^11.2.0",
     "moment": "^2.30.1"
