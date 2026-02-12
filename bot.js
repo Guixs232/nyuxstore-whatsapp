@@ -26,6 +26,7 @@ const TEMPO_LIMPEZA_MS = 5 * 60 * 1000;
 let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
+let qrCodeAtual = null; // Guarda o QR code raw
 
 setInterval(() => {
     mensagensProcessadas.clear();
@@ -35,9 +36,27 @@ setInterval(() => {
 // ===== SERVIDOR WEB CORRIGIDO =====
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-
+    
     const url = req.url;
+
+    // API STATUS - Para AJAX
+    if (url === '/api/status') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+            conectado: botConectado,
+            temQR: !!qrCodeDataURL,
+            timestamp: new Date().toISOString()
+        }));
+        return;
+    }
+
+    if (url === '/health') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
+        return;
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
     if (url === '/') {
         res.end(`
@@ -109,6 +128,12 @@ const server = http.createServer((req, res) => {
                         border: 2px solid #ff7675;
                     }
                     
+                    .waiting {
+                        background: linear-gradient(135deg, #fdcb6e, #e17055);
+                        border: 2px solid #fdcb6e;
+                        animation: pulse 2s infinite;
+                    }
+                    
                     .btn {
                         background: linear-gradient(135deg, #00d9ff, #0099cc);
                         color: #1a1a2e;
@@ -166,6 +191,21 @@ const server = http.createServer((req, res) => {
                         margin-bottom: 15px;
                     }
                     
+                    .loader {
+                        border: 4px solid rgba(255,255,255,0.1);
+                        border-left-color: #00d9ff;
+                        border-radius: 50%;
+                        width: 50px;
+                        height: 50px;
+                        animation: spin 1s linear infinite;
+                        margin: 20px auto;
+                    }
+                    
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                    
                     /* Responsivo */
                     @media (max-width: 480px) {
                         h1 { font-size: 1.8rem; }
@@ -182,24 +222,57 @@ const server = http.createServer((req, res) => {
                     <h1>${STORE_NAME}</h1>
                     <p class="subtitle">Bot WhatsApp Automatizado</p>
                     
-                    <div class="status ${botConectado ? 'online' : 'offline'} ${!botConectado ? 'pulse' : ''}">
-                        ${botConectado ? '✅ Bot Conectado e Online!' : '⏳ Aguardando Conexão...'}
+                    <div id="statusBox" class="status waiting pulse">
+                        ⏳ Iniciando sistema...
                     </div>
                     
-                    ${!botConectado ? `
-                        <a href="/qr" class="btn">📱 Escanear QR Code</a>
-                        <br>
-                        <a href="/qr" class="btn" style="background: linear-gradient(135deg, #fdcb6e, #e17055); color: white;">🔄 Atualizar Página</a>
-                    ` : '<div class="btn btn-success">🚀 Sistema Online!</div>'}
+                    <div id="qrButton" style="display:none;">
+                        <a href="/qr" class="btn">📱 Ver QR Code</a>
+                    </div>
                     
                     <div class="info-box">
                         <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
                         <p><strong>👑 Suporte:</strong> +${ADMIN_NUMBER}</p>
-                        <p style="margin-top: 15px; font-size: 0.9rem; color: #b0b0b0;">
-                            ${!botConectado ? 'Clique no botão acima para ver o QR Code' : 'Sistema operando normalmente'}
+                        <p id="statusText" style="margin-top: 15px; font-size: 0.9rem; color: #b0b0b0;">
+                            Aguardando conexão com WhatsApp...
                         </p>
                     </div>
                 </div>
+                
+                <script>
+                    // Verifica status a cada 3 segundos
+                    function checkStatus() {
+                        fetch('/api/status')
+                            .then(res => res.json())
+                            .then(data => {
+                                const statusBox = document.getElementById('statusBox');
+                                const qrButton = document.getElementById('qrButton');
+                                const statusText = document.getElementById('statusText');
+                                
+                                if (data.conectado) {
+                                    statusBox.className = 'status online';
+                                    statusBox.innerHTML = '✅ Bot Conectado e Online!';
+                                    qrButton.style.display = 'none';
+                                    statusText.innerHTML = 'Sistema operando normalmente';
+                                } else if (data.temQR) {
+                                    statusBox.className = 'status waiting';
+                                    statusBox.innerHTML = '📱 QR Code Pronto!';
+                                    qrButton.style.display = 'block';
+                                    statusText.innerHTML = 'Clique no botão acima para escanear';
+                                } else {
+                                    statusBox.className = 'status waiting pulse';
+                                    statusBox.innerHTML = '⏳ Gerando QR Code...';
+                                    qrButton.style.display = 'none';
+                                    statusText.innerHTML = 'Aguardando conexão com WhatsApp...';
+                                }
+                            })
+                            .catch(err => console.log('Erro ao verificar status:', err));
+                    }
+                    
+                    // Verifica imediatamente e a cada 3s
+                    checkStatus();
+                    setInterval(checkStatus, 3000);
+                </script>
             </body>
             </html>
         `);
@@ -259,7 +332,6 @@ const server = http.createServer((req, res) => {
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                    <meta http-equiv="refresh" content="8">
                     <title>QR Code - ${STORE_NAME}</title>
                     <style>
                         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -369,12 +441,6 @@ const server = http.createServer((req, res) => {
                             font-size: 0.9rem;
                         }
                         
-                        .timer {
-                            color: #a0a0a0;
-                            font-size: 0.8rem;
-                            margin-top: 10px;
-                        }
-                        
                         @keyframes pulse {
                             0%, 100% { opacity: 1; }
                             50% { opacity: 0.6; }
@@ -405,11 +471,6 @@ const server = http.createServer((req, res) => {
                             .info-box { padding: 15px; }
                             .info-box li { font-size: 0.85rem; }
                         }
-                        
-                        @media (max-width: 320px) {
-                            .qr-wrapper { max-width: 240px; }
-                            .qr-wrapper img { max-width: 180px; }
-                        }
                     </style>
                 </head>
                 <body>
@@ -422,7 +483,6 @@ const server = http.createServer((req, res) => {
                         </div>
                         
                         <div class="atualizando">🔄 Atualizando automaticamente...</div>
-                        <div class="timer">A página recarrega em 8 segundos</div>
                         
                         <div class="info-box">
                             <h3>📖 Como conectar:</h3>
@@ -437,6 +497,11 @@ const server = http.createServer((req, res) => {
                         
                         <a href="/" class="btn-voltar">← Voltar ao início</a>
                     </div>
+                    
+                    <script>
+                        // Atualiza a cada 5 segundos para pegar novo QR se necessário
+                        setTimeout(() => location.reload(), 5000);
+                    </script>
                 </body>
                 </html>
             `);
@@ -479,32 +544,22 @@ const server = http.createServer((req, res) => {
                         }
                         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-                        h1 { color: #00d9ff; margin-bottom: 10px; }
+                        h1 { color: #00d9ff; margin-bottom: 10px; font-size: 1.8rem; }
                         p { color: #a0a0a0; }
+                        .icon { font-size: 3rem; margin-bottom: 20px; }
                     </style>
                 </head>
                 <body>
-                    <h1>🎮 ${STORE_NAME}</h1>
+                    <div class="icon">⏳</div>
+                    <h1>${STORE_NAME}</h1>
                     <div class="spinner"></div>
                     <p class="loading">Gerando QR Code...</p>
-                    <p>Aguarde alguns segundos</p>
+                    <p>Aguarde o bot conectar ao WhatsApp</p>
+                    <p style="margin-top: 20px; font-size: 0.8rem; color: #666;">Atualizando em 3 segundos...</p>
                 </body>
                 </html>
             `);
         }
-    }
-    else if (url === '/api/status') {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({
-            conectado: botConectado,
-            numero: botConectado ? BOT_NUMBER : null,
-            temQR: !!qrCodeDataURL,
-            timestamp: new Date().toISOString()
-        }));
-    }
-    else if (url === '/health') {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
     }
     else {
         res.writeHead(302, { 'Location': '/' });
@@ -514,21 +569,34 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Servidor web rodando na porta ${PORT}`);
-    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
+    console.log(`📱 Acesse: http://localhost:${PORT}`);
 });
 
 async function atualizarQRCode(qr) {
     try {
         const QRCode = require('qrcode');
+        qrCodeAtual = qr; // Guarda o QR raw
+        
+        // Gera Data URL menor e mais compatível
         qrCodeDataURL = await QRCode.toDataURL(qr, {
+            type: 'image/png',
             width: 400,
             margin: 2,
-            color: { dark: '#000000', light: '#FFFFFF' }
+            color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+            }
         });
-        console.log('📱 QR Code atualizado na web!');
+        
+        console.log('📱 QR Code gerado com sucesso!');
+        console.log('📱 Tamanho:', qrCodeDataURL.length, 'caracteres');
+        
+        // Também mostra no terminal
         qrcode.generate(qr, { small: true });
+        
     } catch (err) {
-        console.error('Erro ao gerar QR Code:', err);
+        console.error('❌ Erro ao gerar QR Code:', err);
+        qrCodeDataURL = null;
     }
 }
 
@@ -577,7 +645,6 @@ function getMenuAdmin() {
 _Digite o número_`;
 }
 
-// FUNÇÃO PARA CALCULAR TEMPO DE USO
 function calcularTempoUso(dataRegistro) {
     if (!dataRegistro) return 'Novo usuário';
     
@@ -605,10 +672,13 @@ async function connectToWhatsApp() {
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
+    console.log('🔌 Iniciando conexão com WhatsApp...');
+    
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ['NyuxStore Bot', 'Chrome', '1.0']
+        browser: ['NyuxStore Bot', 'Chrome', '1.0'],
+        printQRInTerminal: false // Desativa QR automático do Baileys
     });
 
     sockGlobal = sock;
@@ -616,17 +686,30 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        if (qr) await atualizarQRCode(qr);
+        // Quando receber QR, atualiza imediatamente
+        if (qr) {
+            console.log('📱 QR Code recebido do WhatsApp!');
+            await atualizarQRCode(qr);
+        }
         
         if (connection === 'close') {
             botConectado = false;
             qrCodeDataURL = null;
+            qrCodeAtual = null;
+            
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(connectToWhatsApp, 5000);
+            console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
+            
+            if (shouldReconnect) {
+                console.log('🔄 Tentando reconectar em 5 segundos...');
+                setTimeout(connectToWhatsApp, 5000);
+            }
         } else if (connection === 'open') {
             botConectado = true;
-            qrCodeDataURL = null;
-            console.log('✅ Bot conectado!');
+            qrCodeDataURL = null; // Limpa QR quando conecta
+            qrCodeAtual = null;
+            console.log('✅ Bot conectado ao WhatsApp com sucesso!');
+            console.log('📱 Número:', sock.user?.id?.split(':')[0]);
         }
     });
 
@@ -642,6 +725,7 @@ async function connectToWhatsApp() {
         
         if (mensagensProcessadas.has(uniqueId)) return;
         mensagensProcessadas.add(uniqueId);
+        
         if (mensagensProcessadas.size > 1000) {
             const iterator = mensagensProcessadas.values();
             mensagensProcessadas.delete(iterator.next().value);
@@ -736,7 +820,6 @@ async function connectToWhatsApp() {
                     msg += `\n🎮 Total: ${total}`;
                     await sock.sendMessage(sender, { text: msg });
                 } else if (text === '5') {
-                    // PERFIL ATUALIZADO
                     const p = db.getPerfil(sender);
                     const numLimpo = sender.replace('@s.whatsapp.net', '').split(':')[0];
                     
