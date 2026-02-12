@@ -5,29 +5,29 @@ const http = require('http');
 const Database = require('./database');
 const moment = require('moment');
 
-// Configurações
+// Configurações - USE VARIÁVEL DE AMBIENTE DO RAILWAY
 const BOT_NUMBER = '556183040115';
 const ADMIN_NUMBER = '5518997972598';
 const STORE_NAME = 'NyuxStore';
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; // Railway define PORT automaticamente
 
 const db = new Database();
-
-// Estados dos usuários
 const userStates = new Map();
 
-// QR Code atual (para mostrar na web)
-let qrCodeAtual = null;
+// Variáveis globais para QR Code
+let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
 
-// ===== SERVIDOR WEB PARA QR CODE =====
+// ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
+    // Headers CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+
     const url = req.url;
-    
-    // Rota principal - status do bot
+
     if (url === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`
             <!DOCTYPE html>
             <html>
@@ -39,52 +39,65 @@ const server = http.createServer((req, res) => {
                         font-family: Arial, sans-serif; 
                         text-align: center; 
                         padding: 50px; 
-                        background: #1a1a2e;
+                        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                         color: white;
+                        min-height: 100vh;
+                        margin: 0;
                     }
                     .status { 
                         padding: 20px; 
-                        border-radius: 10px; 
-                        margin: 20px;
-                        font-size: 18px;
+                        border-radius: 15px; 
+                        margin: 20px auto;
+                        font-size: 20px;
+                        max-width: 500px;
+                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
                     }
-                    .online { background: #4CAF50; }
-                    .offline { background: #f44336; }
-                    h1 { color: #00d9ff; }
+                    .online { background: linear-gradient(135deg, #4CAF50, #45a049); }
+                    .offline { background: linear-gradient(135deg, #f44336, #da190b); }
+                    h1 { color: #00d9ff; text-shadow: 0 0 10px rgba(0,217,255,0.5); }
                     .btn {
-                        background: #00d9ff;
+                        background: linear-gradient(135deg, #00d9ff, #0099cc);
                         color: #1a1a2e;
-                        padding: 15px 30px;
+                        padding: 20px 40px;
                         text-decoration: none;
-                        border-radius: 25px;
+                        border-radius: 30px;
                         font-weight: bold;
+                        font-size: 18px;
                         display: inline-block;
-                        margin: 10px;
+                        margin: 20px;
+                        box-shadow: 0 4px 15px rgba(0,217,255,0.4);
+                    }
+                    .info {
+                        background: rgba(255,255,255,0.1);
+                        padding: 20px;
+                        border-radius: 15px;
+                        margin: 20px auto;
+                        max-width: 600px;
                     }
                 </style>
             </head>
             <body>
                 <h1>🎮 ${STORE_NAME} Bot</h1>
                 <div class="status ${botConectado ? 'online' : 'offline'}">
-                    ${botConectado ? '✅ Bot Conectado' : '⏳ Aguardando QR Code...'}
+                    ${botConectado ? '✅ Bot Conectado e Online!' : '⏳ Aguardando QR Code...'}
                 </div>
-                ${!botConectado ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : ''}
-                <p>Bot número: <strong>+${BOT_NUMBER}</strong></p>
+                ${!botConectado ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : '<div class="btn" style="background: #4CAF50;">🚀 Bot Online!</div>'}
+                <div class="info">
+                    <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
+                    <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
+                    <p><strong>🌐 Porta:</strong> ${PORT}</p>
+                </div>
             </body>
             </html>
         `);
     }
-    
-    // Rota do QR Code
     else if (url === '/qr') {
         if (botConectado) {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.end(`
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>QR Code - ${STORE_NAME}</title>
-                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <title>Conectado - ${STORE_NAME}</title>
                     <style>
                         body { 
                             font-family: Arial, sans-serif; 
@@ -95,98 +108,91 @@ const server = http.createServer((req, res) => {
                         }
                         .success { 
                             background: #4CAF50; 
-                            padding: 20px; 
-                            border-radius: 10px;
+                            padding: 40px; 
+                            border-radius: 20px;
+                            margin: 50px auto;
+                            max-width: 500px;
                         }
                     </style>
                 </head>
                 <body>
                     <div class="success">
                         <h1>✅ Bot Já Conectado!</h1>
-                        <p>O bot já está online e funcionando.</p>
+                        <p>O bot está online e funcionando.</p>
                     </div>
                 </body>
                 </html>
             `);
-        } else if (qrCodeAtual) {
-            const QRCode = require('qrcode');
-            QRCode.toDataURL(qrCodeAtual, { width: 400, margin: 2 }, (err, url) => {
-                if (err) {
-                    res.writeHead(500);
-                    res.end('Erro ao gerar QR Code');
-                    return;
-                }
-                
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(`
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <title>QR Code - ${STORE_NAME}</title>
-                        <meta name="viewport" content="width=device-width, initial-scale=1">
-                        <meta http-equiv="refresh" content="10">
-                        <style>
-                            body { 
-                                font-family: Arial, sans-serif; 
-                                text-align: center; 
-                                padding: 20px; 
-                                background: #1a1a2e;
-                                color: white;
-                            }
-                            h1 { color: #00d9ff; }
-                            .qr-container {
-                                background: white;
-                                padding: 20px;
-                                border-radius: 20px;
-                                display: inline-block;
-                                margin: 20px;
-                            }
-                            .qr-container img {
-                                max-width: 100%;
-                                height: auto;
-                            }
-                            .info {
-                                background: #16213e;
-                                padding: 15px;
-                                border-radius: 10px;
-                                margin: 20px auto;
-                                max-width: 500px;
-                            }
-                            .atualizando {
-                                color: #ffd700;
-                                animation: pulse 1s infinite;
-                            }
-                            @keyframes pulse {
-                                0%, 100% { opacity: 1; }
-                                50% { opacity: 0.5; }
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <h1>🎮 ${STORE_NAME}</h1>
-                        <h2>📱 Escaneie o QR Code</h2>
-                        <div class="qr-container">
-                            <img src="${url}" alt="QR Code WhatsApp">
-                        </div>
-                        <div class="info">
-                            <p class="atualizando">🔄 Atualizando automaticamente...</p>
-                            <p>1. Abra o WhatsApp no seu celular</p>
-                            <p>2. Vá em <strong>Configurações → WhatsApp Web</strong></p>
-                            <p>3. Aponte a câmera para o QR Code</p>
-                        </div>
-                        <p>Esta página atualiza a cada 10 segundos</p>
-                    </body>
-                    </html>
-                `);
-            });
-        } else {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        } else if (qrCodeDataURL) {
             res.end(`
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Aguardando - ${STORE_NAME}</title>
+                    <title>QR Code - ${STORE_NAME}</title>
                     <meta http-equiv="refresh" content="5">
+                    <style>
+                        body { 
+                            font-family: Arial, sans-serif; 
+                            text-align: center; 
+                            padding: 20px; 
+                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                            color: white;
+                            min-height: 100vh;
+                            margin: 0;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                        }
+                        h1 { color: #00d9ff; }
+                        .qr-container {
+                            background: white;
+                            padding: 30px;
+                            border-radius: 25px;
+                            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+                            margin: 20px;
+                        }
+                        .qr-container img { width: 400px; max-width: 90vw; }
+                        .info {
+                            background: rgba(255,255,255,0.1);
+                            padding: 25px;
+                            border-radius: 15px;
+                            margin: 30px auto;
+                            max-width: 500px;
+                        }
+                        .atualizando {
+                            color: #ffd700;
+                            animation: pulse 1.5s infinite;
+                            font-weight: bold;
+                        }
+                        @keyframes pulse {
+                            0%, 100% { opacity: 1; }
+                            50% { opacity: 0.7; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>🎮 ${STORE_NAME}</h1>
+                    <h2>📱 Escaneie o QR Code</h2>
+                    <div class="qr-container">
+                        <img src="${qrCodeDataURL}" alt="QR Code">
+                    </div>
+                    <div class="info">
+                        <p class="atualizando">🔄 Atualizando automaticamente...</p>
+                        <p>1. Abra o WhatsApp no celular</p>
+                        <p>2. Configurações → WhatsApp Web</p>
+                        <p>3. Aponte a câmera para o QR Code</p>
+                    </div>
+                </body>
+                </html>
+            `);
+        } else {
+            res.end(`
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Gerando - ${STORE_NAME}</title>
+                    <meta http-equiv="refresh" content="3">
                     <style>
                         body { 
                             font-family: Arial, sans-serif; 
@@ -196,53 +202,69 @@ const server = http.createServer((req, res) => {
                             color: white;
                         }
                         .loading {
-                            font-size: 24px;
+                            font-size: 28px;
                             animation: pulse 1s infinite;
                         }
                     </style>
                 </head>
                 <body>
                     <h1>⏳ Gerando QR Code...</h1>
-                    <p class="loading">Aguarde alguns segundos...</p>
-                    <p>Esta página atualiza automaticamente</p>
+                    <p class="loading">Aguarde...</p>
                 </body>
                 </html>
             `);
         }
     }
-    
-    // API para status (JSON)
     else if (url === '/api/status') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({
             conectado: botConectado,
             numero: botConectado ? BOT_NUMBER : null,
+            temQR: !!qrCodeDataURL,
             timestamp: new Date().toISOString()
         }));
     }
-    
-    // Rota não encontrada
+    else if (url === '/health') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
+    }
     else {
-        res.writeHead(404);
-        res.end('Página não encontrada');
+        res.writeHead(302, { 'Location': '/' });
+        res.end();
     }
 });
 
-server.listen(PORT, () => {
+// INICIA SERVIDOR PRIMEIRO (importante para Railway)
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Servidor web rodando na porta ${PORT}`);
-    console.log(`🔗 QR Code disponível em: http://localhost:${PORT}/qr`);
+    console.log(`🔗 URL: http://localhost:${PORT}`);
+    console.log(`📱 QR Code: http://localhost:${PORT}/qr`);
 });
 
-// Menus (mantidos iguais)
+// Função para atualizar QR Code na web
+async function atualizarQRCode(qr) {
+    try {
+        const QRCode = require('qrcode');
+        qrCodeDataURL = await QRCode.toDataURL(qr, {
+            width: 500,
+            margin: 2,
+            color: { dark: '#000000', light: '#FFFFFF' }
+        });
+        console.log('📱 QR Code atualizado na web!');
+    } catch (err) {
+        console.error('Erro ao gerar QR Code:', err);
+    }
+}
+
+// Menus
 function getMenuPrincipal(nome) {
-    return `
-🎮 *${STORE_NAME}*
+    return `🎮 *${STORE_NAME}*
 
 Olá, ${nome}! 👋
 
 *Escolha uma opção:*
 
-1️⃣ *Comprar Key* 💳
+1️⃣ *Comprar Key* 💰
 2️⃣ *Resgatar Key* 🎁
 3️⃣ *Buscar Jogo* 🔍
 4️⃣ *Ver Jogos* 📋
@@ -251,13 +273,11 @@ Olá, ${nome}! 👋
 
 0️⃣ *Falar com Atendente* 💬
 
-_Digite o número da opção desejada_
-`;
+_Digite o número da opção desejada_`;
 }
 
 function getMenuTesteExpirado(nome) {
-    return `
-😢 *${STORE_NAME} - Teste Expirado*
+    return `😢 *${STORE_NAME} - Teste Expirado*
 
 Ei ${nome}, seu teste grátis acabou!
 
@@ -265,23 +285,20 @@ Quer continuar jogando? 🎮
 
 *Escolha uma opção:*
 
-1️⃣ *Comprar Key* 💳
+1️⃣ *Comprar Key* 💰
    • 7 dias: R$ 10
    • 1 mês: R$ 25
    • Lifetime: R$ 80
 
 2️⃣ *Falar com Admin* 👑
-   Chamar no privado para comprar
 
 0️⃣ *Falar com Atendente* 💬
 
-_Digite o número da opção desejada_
-`;
+_Digite o número da opção desejada_`;
 }
 
 function getMenuAdmin() {
-    return `
-🔧 *PAINEL ADMIN - ${STORE_NAME}*
+    return `🔧 *PAINEL ADMIN - ${STORE_NAME}*
 
 *Escolha uma opção:*
 
@@ -296,13 +313,12 @@ function getMenuAdmin() {
 
 0️⃣ *Voltar ao Menu*
 
-_Digite o número da opção_
-`;
+_Digite o número da opção_`;
 }
 
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
-    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion, makeInMemoryStore } = await import('@whiskeysockets/baileys');
+    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -312,19 +328,13 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
+        printQRInTerminal: true,
         auth: state,
         browser: ['NyuxStore Bot', 'Chrome', '1.0'],
         syncFullHistory: false,
         markOnlineOnConnect: true,
         keepAliveIntervalMs: 30000,
-        shouldIgnoreJid: jid => false,
-        // Configurações para grupos
-        getMessage: async () => {
-            return {
-                conversation: 'Olá! Sou o bot da NyuxStore. Envie !menu para ver opções.'
-            };
-        }
+        shouldIgnoreJid: jid => false
     });
 
     sockGlobal = sock;
@@ -334,20 +344,21 @@ async function connectToWhatsApp() {
         
         if (qr) {
             console.log('📱 Novo QR Code gerado!');
-            qrCodeAtual = qr;
-            // Também mostra no terminal como backup
+            await atualizarQRCode(qr);
             qrcode.generate(qr, { small: true });
         }
         
         if (connection === 'close') {
             botConectado = false;
-            qrCodeAtual = null;
+            qrCodeDataURL = null;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
-            if (shouldReconnect) connectToWhatsApp();
+            if (shouldReconnect) {
+                setTimeout(connectToWhatsApp, 5000);
+            }
         } else if (connection === 'open') {
             botConectado = true;
-            qrCodeAtual = null;
+            qrCodeDataURL = null;
             console.log('✅ Bot conectado ao WhatsApp!');
             console.log('📱 Número:', sock.user.id.split(':')[0]);
             console.log('🤖 Nome:', sock.user.name);
@@ -356,17 +367,15 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Processar mensagens (privado e grupo)
+    // Processar mensagens
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        
         if (!msg.message || msg.key.fromMe) return;
 
         const sender = msg.key.remoteJid;
         const isGroup = sender.endsWith('@g.us');
         const pushName = msg.pushName || 'Cliente';
         
-        // Extrai texto da mensagem
         let text = '';
         let isMentioned = false;
         
@@ -374,7 +383,6 @@ async function connectToWhatsApp() {
             text = msg.message.conversation;
         } else if (msg.message.extendedTextMessage) {
             text = msg.message.extendedTextMessage.text;
-            // Verifica se o bot foi mencionado
             if (msg.message.extendedTextMessage.contextInfo?.mentionedJid) {
                 const mentioned = msg.message.extendedTextMessage.contextInfo.mentionedJid;
                 isMentioned = mentioned.includes(sock.user.id);
@@ -389,122 +397,74 @@ async function connectToWhatsApp() {
 
         text = text.toLowerCase().trim();
         
-        // No grupo, só responde se:
-        // 1. For mencionado (@NyuxStore)
-        // 2. Mensagem começar com !
-        // 3. For mensagem privada no grupo (reply)
+        // No grupo, só responde se mencionado ou com !
         if (isGroup) {
             const isCommand = text.startsWith('!');
             if (!isMentioned && !isCommand) return;
-            
-            // Remove o ! do início se existir
-            if (isCommand) {
-                text = text.substring(1).trim();
-            }
+            if (isCommand) text = text.substring(1).trim();
         }
 
-        // Verifica se é admin
         const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us', '');
         const isAdmin = numeroLimpo === ADMIN_NUMBER;
-        
-        // Debug logs
-        if (text === 'admin' || text === 'debug') {
-            console.log('🔍 DEBUG - Sender:', sender);
-            console.log('🔍 DEBUG - Número limpo:', numeroLimpo);
-            console.log('🔍 DEBUG - isAdmin:', isAdmin);
-            console.log('🔍 DEBUG - isGroup:', isGroup);
-        }
-
         const perfil = db.getPerfil(sender);
         const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
         const userState = userStates.get(sender) || { step: 'menu' };
 
         try {
-            // ===== COMANDOS DE GRUPO =====
-            if (isGroup) {
-                // Comandos básicos no grupo
-                if (text === 'menu' || text === 'ajuda') {
-                    await sock.sendMessage(sender, {
-                        text: `🎮 *${STORE_NAME}* - Comandos no Grupo:\n\n• *!menu* - Ver este menu\n• *!jogos* - Lista de jogos\n• *!precos* - Preços das keys\n• *!teste* - Key teste grátis\n• *!comprar* - Como comprar\n• *!suporte* - Falar com admin\n\n💡 *Dica:* Me chame no privado para acessar todos os jogos!`
-                    });
-                    return;
-                }
-                
-                if (text === 'jogos') {
-                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
-                    let msg = '📋 *Jogos Disponíveis:*\n\n';
-                    
-                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria).slice(0, 5)) {
-                        msg += `${categoria}:\n`;
-                        jogos.slice(0, 3).forEach((jogo, index) => {
-                            msg += `  ${index + 1}. ${jogo.jogo}\n`;
-                        });
-                        if (jogos.length > 3) msg += `  ...e mais ${jogos.length - 3} jogos\n`;
-                        msg += '\n';
-                    }
-                    
-                    msg += `\n🎮 Total: ${Object.values(jogosPorCategoria).flat().length} jogos\n\n💬 Chame no privado para ver todos e resgatar!`;
-                    await sock.sendMessage(sender, { text: msg });
-                    return;
-                }
-                
-                if (text === 'precos') {
-                    await sock.sendMessage(sender, {
-                        text: `💰 *Preços das Keys:*\n\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💳 Pagamento via Pix, Transferência ou Cartão\n\n📱 Chame no privado: +${BOT_NUMBER}`
-                    });
-                    return;
-                }
-                
-                if (text === 'comprar' || text === 'suporte') {
-                    await sock.sendMessage(sender, {
-                        text: `💬 *Falar com Admin:*\n\n📱 WhatsApp: +${ADMIN_NUMBER}\n🤖 Bot: +${BOT_NUMBER}\n\nOu me chame no privado clicando no meu número acima!`
-                    });
-                    return;
-                }
-                
-                // No grupo, redireciona para privado para outras funções
-                if (['1', '2', '3', '4', '5', '6', 'teste', 'gratis'].includes(text)) {
-                    await sock.sendMessage(sender, {
-                        text: `👋 Ei ${pushName}!\n\nPara acessar *todos os jogos* e usar o teste grátis, me chame no *privado*:\n\n📱 +${BOT_NUMBER}\n\nOu clique aqui: wa.me/${BOT_NUMBER}`,
-                        mentions: [sender]
-                    });
-                    return;
-                }
-            }
-
-            // ===== COMANDO ADMIN =====
+            // COMANDO ADMIN
             if (text === 'admin' || text === 'adm') {
                 if (isAdmin) {
                     userStates.set(sender, { step: 'admin_menu' });
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
                 } else {
-                    await sock.sendMessage(sender, { 
-                        text: '⛔ *Acesso Negado*\n\nVocê não tem permissão.' 
-                    });
+                    await sock.sendMessage(sender, { text: '⛔ *Acesso Negado*' });
                 }
                 return;
             }
 
-            // ===== MENU PRINCIPAL =====
+            // COMANDOS DE GRUPO
+            if (isGroup) {
+                if (text === 'menu' || text === 'ajuda') {
+                    await sock.sendMessage(sender, {
+                        text: `🎮 *${STORE_NAME}* - Comandos:\n\n• !menu - Este menu\n• !jogos - Lista de jogos\n• !precos - Preços\n• !comprar - Como comprar\n• !teste - Teste grátis (PV)\n\n💬 Me chame no privado!`
+                    });
+                    return;
+                }
+                if (text === 'jogos') {
+                    const jogos = db.getJogosDisponiveisPorCategoria();
+                    let msg = '📋 *Jogos:*\n\n';
+                    let total = 0;
+                    for (const [cat, lista] of Object.entries(jogos).slice(0, 3)) {
+                        msg += `${cat}: ${lista.length} jogos\n`;
+                        total += lista.length;
+                    }
+                    msg += `\n🎮 Total: ${total} jogos\n\n💬 Chame no PV: +${BOT_NUMBER}`;
+                    await sock.sendMessage(sender, { text: msg });
+                    return;
+                }
+                if (text === 'precos') {
+                    await sock.sendMessage(sender, {
+                        text: `💰 *Preços:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n📱 +${BOT_NUMBER}`
+                    });
+                    return;
+                }
+                if (text === 'comprar' || text === 'teste') {
+                    await sock.sendMessage(sender, {
+                        text: `👋 ${pushName}, me chame no privado!\n\n📱 wa.me/${BOT_NUMBER}\n\nPara usar o teste grátis!`
+                    });
+                    return;
+                }
+            }
+
+            // MENU PRINCIPAL
             if (userState.step === 'menu') {
-                // Se teste expirou, mostra menu especial
                 if (testeExpirado && !isAdmin) {
-                    if (text === '1' || text.includes('comprar')) {
-                        await sock.sendMessage(sender, {
-                            text: `💳 *Comprar Key*\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
-                        });
-                    } else if (text === '2' || text.includes('admin')) {
-                        await sock.sendMessage(sender, { text: '👑 *Chamando Admin...*' });
+                    if (text === '1') {
+                        await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +${ADMIN_NUMBER}` });
+                    } else if (text === '2') {
+                        await sock.sendMessage(sender, { text: '👑 Chamando admin...' });
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: *Teste expirado!*`
-                        });
-                        await sock.sendMessage(sender, {
-                            text: `✅ *Admin notificado!*\n\nO admin foi avisado e vai te chamar em breve.\n\n👤 +${ADMIN_NUMBER}`
-                        });
-                    } else if (text === '0') {
-                        await sock.sendMessage(sender, { text: '💬 Aguarde...' });
-                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `📩 *Atendimento*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}`
+                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\n${pushName}\n${numeroLimpo}\nStatus: Teste expirado!`
                         });
                     } else {
                         await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
@@ -512,183 +472,134 @@ async function connectToWhatsApp() {
                     return;
                 }
 
-                // Menu normal
-                if (text === '1' || text.includes('comprar')) {
-                    await sock.sendMessage(sender, {
-                        text: `💳 *Comprar Key*\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
-                    });
-                } else if (text === '2' || text.includes('resgatar')) {
+                if (text === '1') {
+                    await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +${ADMIN_NUMBER}` });
+                } else if (text === '2') {
                     userStates.set(sender, { step: 'resgatar_key' });
-                    await sock.sendMessage(sender, {
-                        text: '🎁 *Resgatar Key*\n\nDigite sua key:\nNYUX-XXXX-XXXX\n\n_Ex: NYUX-AB12-CD34_'
-                    });
-                } else if (text === '3' || text.includes('buscar')) {
-                    const temAcesso = db.verificarAcesso(sender);
-                    if (!temAcesso) {
-                        await sock.sendMessage(sender, {
-                            text: '❌ *Acesso Negado*\n\nDigite *2* para resgatar key ou *6* para teste grátis.'
-                        });
+                    await sock.sendMessage(sender, { text: '🎁 Digite sua key (NYUX-XXXX-XXXX):' });
+                } else if (text === '3') {
+                    if (!db.verificarAcesso(sender)) {
+                        await sock.sendMessage(sender, { text: '❌ Precisa de key! Digite 2 ou 6' });
                         return;
                     }
-                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
-                    let msg = '🎮 *Jogos Disponíveis*\n\n';
-                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria)) {
-                        msg += `${categoria}\n`;
-                        jogos.forEach((jogo, index) => {
-                            msg += `${index + 1}. ${jogo.jogo}\n`;
-                        });
+                    const jogos = db.getJogosDisponiveisPorCategoria();
+                    let msg = '🎮 *Jogos:*\n\n';
+                    for (const [cat, lista] of Object.entries(jogos)) {
+                        msg += `${cat}\n`;
+                        lista.slice(0, 5).forEach((j, i) => msg += `${i + 1}. ${j.jogo}\n`);
+                        if (lista.length > 5) msg += `...e mais ${lista.length - 5}\n`;
                         msg += '\n';
                     }
-                    msg += '🔍 *Digite o nome do jogo:*';
+                    msg += '🔍 Digite o nome do jogo:';
                     userStates.set(sender, { step: 'buscar_jogo' });
                     await sock.sendMessage(sender, { text: msg });
-                } else if (text === '4' || text.includes('jogos')) {
-                    const temAcesso = db.verificarAcesso(sender);
-                    if (!temAcesso) {
-                        await sock.sendMessage(sender, {
-                            text: '❌ *Acesso Negado*\n\nDigite *2* para resgatar key ou *6* para teste grátis.'
-                        });
+                } else if (text === '4') {
+                    if (!db.verificarAcesso(sender)) {
+                        await sock.sendMessage(sender, { text: '❌ Precisa de key! Digite 2 ou 6' });
                         return;
                     }
-                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
-                    let msg = '📋 *Lista de Jogos*\n\n';
+                    const jogos = db.getJogosDisponiveisPorCategoria();
+                    let msg = '📋 *Lista:*\n\n';
                     let total = 0;
-                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria)) {
-                        msg += `${categoria} (${jogos.length})\n`;
-                        jogos.forEach((jogo, index) => {
-                            msg += `   ${index + 1}. ${jogo.jogo}\n`;
-                            total++;
-                        });
-                        msg += '\n';
+                    for (const [cat, lista] of Object.entries(jogos)) {
+                        msg += `${cat} (${lista.length})\n`;
+                        lista.forEach((j, i) => msg += `  ${i + 1}. ${j.jogo}\n`);
+                        total += lista.length;
                     }
-                    msg += `🎮 Total: ${total} jogos\n\n💡 Use opção *3* para buscar`;
+                    msg += `\n🎮 Total: ${total}`;
                     await sock.sendMessage(sender, { text: msg });
-                } else if (text === '5' || text.includes('perfil')) {
-                    const perfilUser = db.getPerfil(sender);
-                    let msg = '👤 *Seu Perfil*\n\n';
-                    msg += `📱 ${numeroLimpo}\n`;
-                    msg += `⏱️ ${perfilUser.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
-                    if (perfilUser.keyInfo) {
-                        msg += `🔑 ${perfilUser.keyInfo.key}\n`;
-                        msg += `📅 ${perfilUser.keyInfo.expira}\n`;
-                    }
-                    msg += `\n🎮 Jogos: ${perfilUser.totalResgatados}`;
-                    if (perfilUser.usouTeste && !perfilUser.temAcesso) {
-                        msg += `\n\n😢 *Teste expirou!*\nDigite *menu* para comprar.`;
-                    }
+                } else if (text === '5') {
+                    const p = db.getPerfil(sender);
+                    let msg = `👤 *Perfil*\n📱 ${numeroLimpo}\n⏱️ ${p.temAcesso ? '✅' : '❌'}\n🎮 Jogos: ${p.totalResgatados}`;
+                    if (p.keyInfo) msg += `\n🔑 ${p.keyInfo.key}\n📅 ${p.keyInfo.expira}`;
+                    if (p.usouTeste && !p.temAcesso) msg += `\n\n😢 Teste expirou!`;
                     await sock.sendMessage(sender, { text: msg });
-                } else if (text === '6' || text.includes('teste') || text.includes('gratis')) {
+                } else if (text === '6') {
                     userStates.set(sender, { step: 'resgatar_key_teste' });
-                    await sock.sendMessage(sender, {
-                        text: '🎉 *Key Teste Grátis*\n\nEscolha:\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ Só 1 teste por pessoa!\n\nDigite o número:'
-                    });
+                    await sock.sendMessage(sender, { text: '🎉 *Teste Grátis*\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ Só 1 por pessoa!\n\nDigite:' });
                 } else if (text === '0') {
                     await sock.sendMessage(sender, { text: '💬 Aguarde...' });
-                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                        text: `📩 *Atendimento*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}`
-                    });
-                } else if (['oi', 'ola', 'olá', 'hey'].includes(text)) {
-                    await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 ${pushName}\n${numeroLimpo}` });
                 } else {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
-
-            // RESGATAR KEY NORMAL
+            // RESGATAR KEY
             else if (userState.step === 'resgatar_key') {
                 const key = text.toUpperCase().replace(/\s/g, '');
-                const resultado = db.resgatarKey(key, sender, pushName);
-                if (resultado.sucesso) {
+                const r = db.resgatarKey(key, sender, pushName);
+                if (r.sucesso) {
                     userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, {
-                        text: `✅ *Key Resgatada!*\n\n🎆 ${resultado.plano}\n⏱️ ${resultado.duracao}\n📅 ${resultado.expira}\n\n🎮 Aproveite!`
-                    });
+                    await sock.sendMessage(sender, { text: `✅ *Key Ativada!*\n\n🎆 ${r.plano}\n📅 ${r.expira}` });
                 } else {
-                    await sock.sendMessage(sender, {
-                        text: `❌ ${resultado.erro}\n\nTente novamente ou digite *menu*`
-                    });
+                    await sock.sendMessage(sender, { text: `❌ ${r.erro}` });
                 }
             }
-
-            // RESGATAR KEY TESTE
+            // TESTE GRÁTIS
             else if (userState.step === 'resgatar_key_teste') {
-                let duracao, horas;
-                if (text === '1') { duracao = '1 hora'; horas = 1; }
-                else if (text === '2') { duracao = '2 horas'; horas = 2; }
-                else if (text === '3') { duracao = '6 horas'; horas = 6; }
+                let dur, hrs;
+                if (text === '1') { dur = '1 hora'; hrs = 1; }
+                else if (text === '2') { dur = '2 horas'; hrs = 2; }
+                else if (text === '3') { dur = '6 horas'; hrs = 6; }
                 else {
                     await sock.sendMessage(sender, { text: '❌ Digite 1, 2 ou 3:' });
                     return;
                 }
                 
-                const jaUsouTeste = db.verificarTesteUsado(sender);
-                if (jaUsouTeste) {
+                if (db.verificarTesteUsado(sender)) {
                     userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, {
-                        text: '❌ *Você já usou seu teste!*\n\nCompre uma key:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 +' + ADMIN_NUMBER
-                    });
+                    await sock.sendMessage(sender, { text: '❌ Já usou teste!\n\nCompre:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80' });
                     return;
                 }
                 
                 const key = `TESTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-                const resultado = db.criarKeyTeste(key, duracao, horas, sender, pushName);
+                const r = db.criarKeyTeste(key, dur, hrs, sender, pushName);
                 
-                if (resultado.sucesso) {
+                if (r.sucesso) {
                     userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, {
-                        text: `🎉 *Key Teste Gerada!*\n\n🔑 ${key}\n⏱️ ${duracao}\n📅 ${resultado.expira}\n\n✅ Acesso liberado!`
-                    });
+                    await sock.sendMessage(sender, { text: `🎉 *Teste Ativado!*\n\n🔑 ${key}\n⏱️ ${dur}\n📅 ${r.expira}\n\n✅ Acesso liberado!` });
                 }
             }
-
             // BUSCAR JOGO
             else if (userState.step === 'buscar_jogo') {
                 const conta = db.buscarConta(text);
                 if (conta) {
                     userStates.set(sender, { step: 'menu' });
                     await sock.sendMessage(sender, {
-                        text: `🎮 *Conta Encontrada!*\n\n*${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 *Login:* ${conta.login}\n🔒 *Senha:* ${conta.senha}\n\n⚠️ *Modo Offline na Steam!*\n🔒 Não altere a senha!\n\n✅ Conta compartilhada - use quantas vezes quiser!`
+                        text: `🎮 *${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 ${conta.login}\n🔒 ${conta.senha}\n\n⚠️ Modo Offline!\n🔒 Não altere a senha!`
                     });
                 } else {
-                    await sock.sendMessage(sender, {
-                        text: `❌ *"${text}" não encontrado*\n\nDigite *4* para ver a lista.`
-                    });
+                    await sock.sendMessage(sender, { text: `❌ "${text}" não encontrado` });
                 }
             }
-
             // MENU ADMIN
             else if (userState.step === 'admin_menu' && isAdmin) {
                 if (text === '1') {
-                    userStates.set(sender, { step: 'admin_add_conta_nome', tempConta: {} });
-                    await sock.sendMessage(sender, { text: '➕ *Adicionar Conta*\n\nDigite o *NOME DO JOGO*:' });
+                    userStates.set(sender, { step: 'admin_add_nome', tempConta: {} });
+                    await sock.sendMessage(sender, { text: '➕ Nome do jogo:' });
                 } else if (text === '2') {
                     userStates.set(sender, { step: 'admin_gerar_key' });
-                    await sock.sendMessage(sender, { text: '🔑 *Gerar Key*\n\n1️⃣ 7 dias\n2️⃣ 1 mês\n3️⃣ Lifetime\n\nDigite:' });
+                    await sock.sendMessage(sender, { text: '🔑 Duração:\n1️⃣ 7 dias\n2️⃣ 1 mês\n3️⃣ Lifetime' });
                 } else if (text === '3') {
-                    userStates.set(sender, { step: 'admin_gerar_key_teste' });
-                    await sock.sendMessage(sender, { text: '🎁 *Gerar Key Teste*\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\nDigite:' });
+                    userStates.set(sender, { step: 'admin_gerar_teste' });
+                    await sock.sendMessage(sender, { text: '🎁 Teste:\n1️⃣ 1h\n2️⃣ 2h\n3️⃣ 6h' });
                 } else if (text === '4') {
                     userStates.set(sender, { step: 'admin_importar' });
-                    await sock.sendMessage(sender, { text: '📄 Envie o arquivo .txt com as contas:' });
+                    await sock.sendMessage(sender, { text: '📄 Envie .txt:' });
                 } else if (text === '5') {
-                    const stats = db.getEstatisticas();
-                    await sock.sendMessage(sender, {
-                        text: `📊 *Estatísticas*\n\n🎮 Jogos: ${stats.totalJogos}\n✅ Disponíveis: ${stats.disponiveis}\n🔑 Keys: ${stats.keysAtivas}\n🎉 Testes: ${stats.keysTeste}\n👥 Clientes: ${stats.totalClientes}`
-                    });
+                    const s = db.getEstatisticas();
+                    await sock.sendMessage(sender, { text: `📊 Estatísticas:\n🎮 ${s.totalJogos} jogos\n✅ ${s.disponiveis} disponíveis\n🔑 ${s.keysAtivas} keys\n👥 ${s.totalClientes} clientes` });
                 } else if (text === '6') {
                     const jogos = db.getTodosJogosDisponiveis();
-                    let msg = '📋 *Jogos:*\n\n';
-                    jogos.slice(0, 50).forEach(j => {
-                        msg += `• ${j.jogo} (${j.categoria})\n`;
-                    });
-                    if (jogos.length > 50) msg += `\n...e mais ${jogos.length - 50}`;
+                    let msg = '📋 Jogos:\n\n';
+                    jogos.forEach(j => msg += `• ${j.jogo}\n`);
                     await sock.sendMessage(sender, { text: msg });
                 } else if (text === '7') {
                     userStates.set(sender, { step: 'admin_broadcast' });
-                    await sock.sendMessage(sender, { text: '📢 *Broadcast*\n\nDigite a mensagem:' });
+                    await sock.sendMessage(sender, { text: '📢 Digite a mensagem:' });
                 } else if (text === '8') {
                     await sock.sendMessage(sender, {
-                        text: `👥 *Entrar em Grupo*\n\nPara adicionar o bot em um grupo:\n\n1️⃣ Adicione o número +${BOT_NUMBER} no grupo\n2️⃣ Dê permissão de *ADMIN*\n3️⃣ Digite *!menu* no grupo\n\n⚠️ O bot só responde comandos com *!* no grupo\n(ex: !menu, !jogos, !precos)`
+                        text: `👥 *Entrar em Grupo*\n\n1️⃣ Adicione +${BOT_NUMBER} no grupo\n2️⃣ Dê permissão de ADMIN\n3️⃣ Digite !menu no grupo\n\n⚠️ O bot só responde comandos com ! no grupo`
                     });
                 } else if (text === '0' || text === 'menu') {
                     userStates.set(sender, { step: 'menu' });
@@ -697,40 +608,36 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
                 }
             }
-
             // ADMIN: ADICIONAR CONTA
-            else if (userState.step === 'admin_add_conta_nome' && isAdmin) {
+            else if (userState.step === 'admin_add_nome' && isAdmin) {
                 const temp = userState.tempConta || {};
                 temp.jogo = text;
-                userStates.set(sender, { step: 'admin_add_conta_categoria', tempConta: temp });
+                userStates.set(sender, { step: 'admin_add_cat', tempConta: temp });
                 
                 const cats = ['🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games', '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red', '🚜 Simuladores', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação/Aventura'];
                 let msg = '➕ Escolha categoria:\n\n';
                 cats.forEach((c, i) => msg += `${i + 1}. ${c}\n`);
                 await sock.sendMessage(sender, { text: msg });
             }
-
-            else if (userState.step === 'admin_add_conta_categoria' && isAdmin) {
+            else if (userState.step === 'admin_add_cat' && isAdmin) {
                 const cats = ['🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games', '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red', '🚜 Simuladores', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação/Aventura'];
                 const escolha = parseInt(text) - 1;
                 if (escolha >= 0 && escolha < cats.length) {
                     const temp = userState.tempConta || {};
                     temp.categoria = cats[escolha];
-                    userStates.set(sender, { step: 'admin_add_conta_login', tempConta: temp });
+                    userStates.set(sender, { step: 'admin_add_login', tempConta: temp });
                     await sock.sendMessage(sender, { text: '➕ Digite o *LOGIN*:' });
                 } else {
                     await sock.sendMessage(sender, { text: '❌ Digite 1-20:' });
                 }
             }
-
-            else if (userState.step === 'admin_add_conta_login' && isAdmin) {
+            else if (userState.step === 'admin_add_login' && isAdmin) {
                 const temp = userState.tempConta || {};
                 temp.login = text;
-                userStates.set(sender, { step: 'admin_add_conta_senha', tempConta: temp });
+                userStates.set(sender, { step: 'admin_add_senha', tempConta: temp });
                 await sock.sendMessage(sender, { text: '➕ Digite a *SENHA*:' });
             }
-
-            else if (userState.step === 'admin_add_conta_senha' && isAdmin) {
+            else if (userState.step === 'admin_add_senha' && isAdmin) {
                 const temp = userState.tempConta || {};
                 temp.senha = text;
                 db.addConta(temp.jogo, temp.categoria, temp.login, temp.senha);
@@ -739,7 +646,6 @@ async function connectToWhatsApp() {
                     text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}`
                 });
             }
-
             // ADMIN: GERAR KEYS
             else if (userState.step === 'admin_gerar_key' && isAdmin) {
                 let duracao, dias;
@@ -757,8 +663,7 @@ async function connectToWhatsApp() {
                     text: `🔑 *Key Gerada!*\n\n${key}\n⏱️ ${duracao}\n\nCopie e envie!`
                 });
             }
-
-            else if (userState.step === 'admin_gerar_key_teste' && isAdmin) {
+            else if (userState.step === 'admin_gerar_teste' && isAdmin) {
                 let duracao, horas;
                 if (text === '1') { duracao = '1 hora'; horas = 1; }
                 else if (text === '2') { duracao = '2 horas'; horas = 2; }
@@ -774,7 +679,6 @@ async function connectToWhatsApp() {
                     text: `🎁 *Key Teste!*\n\n${key}\n⏱️ ${duracao}\n\nEnvie para o cliente!`
                 });
             }
-
             // ADMIN: IMPORTAR
             else if (userState.step === 'admin_importar' && isAdmin) {
                 if (msg.message.documentMessage) {
@@ -798,12 +702,11 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: '📄 Envie o .txt:' });
                 }
             }
-
             // ADMIN: BROADCAST
             else if (userState.step === 'admin_broadcast' && isAdmin) {
                 const clientes = db.getTodosClientes();
                 let enviados = 0;
-                await sock.sendMessage(sender, { text: `📢 Enviando para ${clientes.length}...` });
+                await sock.sendMessage(sender, { text: `📢 Enviando para ${clientes.length} clientes...` });
                 for (const cliente of clientes) {
                     try {
                         await sock.sendMessage(cliente.numero, {
