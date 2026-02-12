@@ -2,21 +2,29 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const http = require('http');
-const readline = require('readline');
+const path = require('path');
+const Database = require('./database');
+const moment = require('moment');
 
+// ==========================================
 // CONFIGURAÇÕES
+// ==========================================
 const BOT_NUMBER = process.env.BOT_NUMBER || '556183040115';
 const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '5518997972598';
 const STORE_NAME = process.env.STORE_NAME || 'NyuxStore';
-const PORT = process.env.PORT || 8080';
+const PORT = process.env.PORT || 8080;
+const ADMIN_MASTER_KEY = 'NYUX-ADM1-GUIXS23';
 
-console.log('🔐 MODO COM VERIFICAÇÃO EM DUAS ETAPAS');
-console.log('📱 Número:', BOT_NUMBER);
+console.log('🚀 Iniciando NyuxStore...');
+console.log('📱 Bot:', BOT_NUMBER);
+console.log('👑 Admin:', ADMIN_NUMBER);
 console.log('');
 
-// LIMPA TUDO
-const pastasParaLimpar = ['auth_info_baileys', 'session', 'qrcode.png', 'qrcode.txt'];
-console.log('🗑️  Limpando...');
+// ==========================================
+// LIMPEZA INICIAL
+// ==========================================
+const pastasParaLimpar = ['auth_info_baileys', 'qrcode.png', 'qrcode.txt'];
+console.log('🧹 Limpando arquivos antigos...');
 pastasParaLimpar.forEach(pasta => {
     try {
         if (fs.existsSync(pasta)) {
@@ -27,90 +35,184 @@ pastasParaLimpar.forEach(pasta => {
 });
 console.log('');
 
-// VARIÁVEIS
+// ==========================================
+// VARIÁVEIS GLOBAIS
+// ==========================================
+const db = new Database();
+const userStates = new Map();
+const mensagensProcessadas = new Set();
+const TEMPO_LIMPEZA_MS = 5 * 60 * 1000;
+
 let botConectado = false;
 let qrCodeDataURL = null;
 let qrCodeRaw = null;
-let tentativas = 0;
+let qrCodeFilePath = null;
 let sockGlobal = null;
-let twoFactorCode = null; // PIN de 6 dígitos
+let tentativasConexao = 0;
+let reconectando = false;
 
-// INTERFACE PARA DIGITAR O PIN
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+// Limpa cache de mensagens
+setInterval(() => {
+    mensagensProcessadas.clear();
+    console.log('🧹 Cache limpo');
+}, TEMPO_LIMPEZA_MS);
 
+// ==========================================
 // SERVIDOR WEB
+// ==========================================
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
+    const url = req.url;
+
+    // API Status
+    if (url === '/api/status') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+            conectado: botConectado,
+            temQR: !!qrCodeDataURL,
+            timestamp: new Date().toISOString()
+        }));
+        return;
+    }
+
+    // QR Code como imagem PNG
+    if (url === '/qr.png') {
+        if (qrCodeFilePath && fs.existsSync(qrCodeFilePath)) {
+            res.setHeader('Content-Type', 'image/png');
+            fs.createReadStream(qrCodeFilePath).pipe(res);
+        } else {
+            res.statusCode = 404;
+            res.end('QR Code não encontrado');
+        }
+        return;
+    }
+
+    // Página principal
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
     
-    if (req.url === '/') {
+    if (url === '/') {
         res.end(`
             <!DOCTYPE html>
             <html>
             <head>
-                <title>${STORE_NAME}</title>
+                <title>${STORE_NAME} - Bot WhatsApp</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
                 <meta http-equiv="refresh" content="3">
                 <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
                     body { 
-                        font-family: Arial; 
+                        font-family: 'Segoe UI', Arial, sans-serif; 
                         text-align: center; 
-                        padding: 50px; 
-                        background: #1a1a2e;
+                        padding: 40px 20px; 
+                        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                         color: white;
+                        min-height: 100vh;
                     }
-                    .box {
-                        padding: 30px;
-                        border-radius: 20px;
-                        margin: 20px auto;
-                        max-width: 450px;
+                    h1 { 
+                        color: #00d9ff; 
+                        font-size: 2.5rem;
+                        margin-bottom: 10px;
+                        text-shadow: 0 0 20px rgba(0,217,255,0.3);
                     }
-                    .online { background: #4CAF50; }
-                    .waiting { background: #ff9800; }
-                    .offline { background: #f44336; }
-                    .pin-box {
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    .status { 
+                        padding: 25px; 
+                        border-radius: 20px; 
+                        margin: 30px auto;
+                        font-size: 1.3rem;
+                        max-width: 500px;
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                    }
+                    .online { 
+                        background: linear-gradient(135deg, #4CAF50, #45a049); 
+                    }
+                    .offline { 
+                        background: linear-gradient(135deg, #f44336, #da190b); 
+                    }
+                    .waiting { 
+                        background: linear-gradient(135deg, #ff9800, #f57c00); 
+                        animation: pulse 2s infinite;
+                    }
+                    @keyframes pulse {
+                        0%, 100% { transform: scale(1); }
+                        50% { transform: scale(1.02); }
+                    }
+                    .qr-container {
+                        background: white;
                         padding: 30px;
-                        border-radius: 20px;
-                        margin: 20px auto;
+                        border-radius: 25px;
+                        margin: 30px auto;
                         max-width: 400px;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
                     }
-                    .pin-code {
-                        font-size: 36px;
+                    .qr-container img { 
+                        width: 100%; 
+                        max-width: 350px;
+                        border-radius: 10px;
+                    }
+                    .btn {
+                        background: linear-gradient(135deg, #00d9ff, #0099cc);
+                        color: #1a1a2e;
+                        padding: 18px 40px;
+                        text-decoration: none;
+                        border-radius: 30px;
                         font-weight: bold;
-                        letter-spacing: 5px;
-                        color: #fff;
-                        margin: 20px 0;
+                        font-size: 1.1rem;
+                        display: inline-block;
+                        margin: 15px;
+                        box-shadow: 0 5px 20px rgba(0,217,255,0.4);
+                        transition: transform 0.3s;
                     }
-                    img { max-width: 300px; background: white; padding: 20px; border-radius: 20px; }
+                    .btn:hover { transform: translateY(-3px); }
+                    .info {
+                        background: rgba(255,255,255,0.1);
+                        backdrop-filter: blur(10px);
+                        padding: 25px;
+                        border-radius: 20px;
+                        margin: 30px auto;
+                        max-width: 500px;
+                        border: 1px solid rgba(255,255,255,0.1);
+                    }
+                    .info p { margin: 10px 0; font-size: 1.1rem; }
+                    .tentativa { color: #aaa; margin-top: 20px; }
                 </style>
             </head>
             <body>
                 <h1>🎮 ${STORE_NAME}</h1>
                 
                 ${botConectado ? `
-                    <div class="box online">
-                        <h2>✅ CONECTADO!</h2>
+                    <div class="status online">
+                        <h2>✅ Bot Conectado!</h2>
+                        <p>Sistema operacional</p>
                     </div>
-                ` : (twoFactorCode ? `
-                    <div class="pin-box">
-                        <h2>🔐 Digite o PIN no terminal!</h2>
-                        <p>Verificação em duas etapas ativada</p>
-                        <p>Abra o terminal e digite o código de 6 dígitos</p>
+                    <div class="info">
+                        <p>🤖 Bot: +${BOT_NUMBER}</p>
+                        <p>👑 Admin: +${ADMIN_NUMBER}</p>
                     </div>
                 ` : (qrCodeDataURL ? `
-                    <div class="box waiting">
+                    <div class="status waiting">
                         <h2>📱 Escaneie o QR Code</h2>
-                        <img src="${qrCodeDataURL}">
-                        <p>Depois digite o PIN se pedir</p>
+                    </div>
+                    <div class="qr-container">
+                        <img src="${qrCodeDataURL}" alt="QR Code WhatsApp">
+                    </div>
+                    <a href="/qr.png" class="btn" download>💾 Baixar QR Code</a>
+                    <div class="info">
+                        <h3>📖 Como conectar:</h3>
+                        <p>1. Abra WhatsApp no celular</p>
+                        <p>2. Toque em ⋮ → <strong>WhatsApp Web</strong></p>
+                        <p>3. Toque em <strong>Conectar dispositivo</strong></p>
+                        <p>4. Aponte a câmera para o QR Code acima</p>
                     </div>
                 ` : `
-                    <div class="box offline">
-                        <h2>⏳ Iniciando...</h2>
-                        <p>Tentativa: ${tentativas}</p>
+                    <div class="status offline">
+                        <h2>⏳ Iniciando conexão...</h2>
                     </div>
-                `))}
+                    <p class="tentativa">Tentativa: ${tentativasConexao}</p>
+                    <div class="info">
+                        <p>Aguarde o QR Code aparecer...</p>
+                        <p>Isso pode levar alguns segundos</p>
+                    </div>
+                `)}
             </body>
             </html>
         `);
@@ -120,183 +222,795 @@ const server = http.createServer((req, res) => {
     }
 });
 
-server.listen(PORT, () => {
-    console.log(`🌐 Site: http://localhost:${PORT}\n`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Servidor: http://localhost:${PORT}`);
+    console.log(`🖼️  QR Code: http://localhost:${PORT}/qr.png\n`);
 });
 
-// FUNÇÃO PARA PEDIR PIN
-function pedirPIN() {
-    return new Promise((resolve) => {
-        console.log('\n╔════════════════════════════════════════╗');
-        console.log('║     🔐 VERIFICAÇÃO EM DUAS ETAPAS      ║');
-        console.log('╠════════════════════════════════════════╣');
-        console.log('║                                        ║');
-        console.log('║  Digite o código de 6 dígitos do       ║');
-        console.log('║  seu WhatsApp (verificação em 2 etapas)║');
-        console.log('║                                        ║');
-        console.log('╚════════════════════════════════════════╝\n');
+// ==========================================
+// FUNÇÕES AUXILIARES
+// ==========================================
+
+async function salvarQRCode(qr) {
+    try {
+        console.log('💾 Processando QR Code...');
+        qrCodeRaw = qr;
+
+        const QRCode = require('qrcode');
         
-        twoFactorCode = 'AGUARDANDO';
-        
-        rl.question('🔑 Digite o PIN de 6 dígitos: ', (pin) => {
-            pin = pin.trim().replace(/\D/g, ''); // Remove não-números
-            
-            if (pin.length === 6) {
-                console.log('✅ PIN recebido:', pin, '\n');
-                twoFactorCode = pin;
-                resolve(pin);
-            } else {
-                console.log('❌ PIN deve ter 6 dígitos!\n');
-                resolve(pedirPIN()); // Pede de novo
-            }
+        // Data URL para web
+        qrCodeDataURL = await QRCode.toDataURL(qr, {
+            width: 500,
+            margin: 2,
+            color: { dark: '#000000', light: '#FFFFFF' }
         });
-    });
+        
+        // Arquivo PNG
+        qrCodeFilePath = path.join(__dirname, 'qrcode.png');
+        await QRCode.toFile(qrCodeFilePath, qr, {
+            width: 500,
+            margin: 2
+        });
+        
+        // Arquivo TXT
+        fs.writeFileSync('qrcode.txt', qr);
+        
+        console.log('✅ QR Code salvo em múltiplos formatos');
+        
+        // Mostra no terminal
+        console.log('\n╔════════════════════════════════════════╗');
+        console.log('║           📱 QR CODE PRONTO            ║');
+        console.log('╚════════════════════════════════════════╝\n');
+        qrcode.generate(qr, { small: false });
+        
+        console.log('\n📋 Texto do QR (primeiros 50 caracteres):');
+        console.log(qr.substring(0, 50) + '...\n');
+        
+    } catch (err) {
+        console.error('❌ Erro ao salvar QR:', err.message);
+    }
 }
 
-// CONEXÃO PRINCIPAL
-async function conectar() {
-    tentativas++;
-    console.log(`\n🔌 Tentativa #${tentativas}`);
+function verificarAdmin(sender) {
+    const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
+    if (numeroLimpo === ADMIN_NUMBER) return true;
+    return db.isAdminMaster(numeroLimpo);
+}
+
+function getMenuPrincipal(nome) {
+    return `🎮 *${STORE_NAME}*
+
+Olá, ${nome}! 👋
+
+*Escolha uma opção:*
+
+1️⃣ *Comprar Key* 💰
+2️⃣ *Resgatar Key* 🎁
+3️⃣ *Buscar Jogo* 🔍
+4️⃣ *Ver Jogos* 📋
+5️⃣ *Meu Perfil* 👤
+6️⃣ *Key Teste Grátis* 🎉
+
+0️⃣ *Falar com Atendente* 💬
+
+_Digite o número da opção_`;
+}
+
+function getMenuAdmin() {
+    return `🔧 *PAINEL ADMIN*
+
+*Escolha uma opção:*
+
+1️⃣ *Adicionar Conta* ➕
+2️⃣ *Gerar Key* 🔑
+3️⃣ *Gerar Key Teste* 🎁
+4️⃣ *Importar Contas (TXT)* 📄
+5️⃣ *Estatísticas* 📊
+6️⃣ *Listar Jogos* 📋
+7️⃣ *Broadcast* 📢
+8️⃣ *Remover Conta* ❌
+9️⃣ *Entrar em Grupo* 👥
+
+0️⃣ *Voltar ao Menu*`;
+}
+
+function calcularTempoUso(dataRegistro) {
+    if (!dataRegistro) return 'Novo usuário';
+    
+    const agora = new Date();
+    const registro = new Date(dataRegistro);
+    const diffMs = agora - registro;
+    
+    const segundos = Math.floor(diffMs / 1000);
+    const minutos = Math.floor(segundos / 60);
+    const horas = Math.floor(minutos / 60);
+    const dias = Math.floor(horas / 24);
+    const meses = Math.floor(dias / 30);
+    const anos = Math.floor(dias / 365);
+    
+    if (anos > 0) return `${anos} ano${anos > 1 ? 's' : ''}`;
+    if (meses > 0) return `${meses} mês${meses > 1 ? 'es' : ''}`;
+    if (dias > 0) return `${dias} dia${dias > 1 ? 's' : ''}`;
+    if (horas > 0) return `${horas} hora${horas > 1 ? 's' : ''}`;
+    if (minutos > 0) return `${minutos} minuto${minutos > 1 ? 's' : ''}`;
+    return 'Agora mesmo';
+}
+
+// ==========================================
+// CONEXÃO WHATSAPP
+// ==========================================
+
+async function connectToWhatsApp() {
+    if (reconectando) return;
+    
+    reconectando = true;
+    tentativasConexao++;
+    
+    const delayMs = Math.min(5000 * Math.pow(2, tentativasConexao - 1), 60000);
+    
+    console.log(`\n🔌 TENTATIVA #${tentativasConexao}\n`);
     
     try {
         const { 
             default: makeWASocket, 
             DisconnectReason, 
             useMultiFileAuthState,
-            fetchLatestBaileysVersion
+            fetchLatestBaileysVersion,
+            delay
         } = await import('@whiskeysockets/baileys');
         
         const { version } = await fetchLatestBaileysVersion();
-        console.log(`📱 WhatsApp Web v${version.join('.')}`);
+        console.log(`📱 Versão WhatsApp Web: ${version.join('.')}`);
+        
+        // Limpa credenciais se falhou muitas vezes
+        if (tentativasConexao > 3) {
+            console.log('🧹 Limpando credenciais antigas...');
+            try {
+                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                tentativasConexao = 0;
+            } catch (e) {}
+        }
         
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        
+        console.log('🔌 Criando conexão...\n');
         
         const sock = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
-            printQRInTerminal: true,
+            printQRInTerminal: false,
             auth: state,
-            browser: ['Chrome', 'Windows', '10'],
-            markOnlineOnConnect: false,
+            browser: ['Chrome', 'Windows', '10.0.19042'],
+            markOnlineOnConnect: true,
             syncFullHistory: false,
+            shouldIgnoreJid: jid => jid?.includes('newsletter') || jid?.includes('broadcast'),
             connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 30000,
-            
-            // IMPORTANTE: Função para tratar 2FA
-            getMessage: async (key) => {
-                return { conversation: 'hello' };
-            }
+            retryRequestDelayMs: 2000,
+            maxMsgRetryCount: 5
         });
 
         sockGlobal = sock;
 
-        // EVENTO DE CONEXÃO
+        // EVENTOS DE CONEXÃO
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
-            // QR CODE
+            // QR CODE RECEBIDO
             if (qr) {
-                console.log('\n✅ QR CODE GERADO!\n');
-                qrCodeRaw = qr;
-                
-                try {
-                    const QRCode = require('qrcode');
-                    qrCodeDataURL = await QRCode.toDataURL(qr, { width: 400 });
-                    await QRCode.toFile('qrcode.png', qr, { width: 400 });
-                } catch (e) {}
-                
-                console.log('╔══════════════════════════════════════╗');
-                console.log('║         📱 ESCANEIE AGORA            ║');
-                console.log('╚══════════════════════════════════════╝\n');
-                qrcode.generate(qr, { small: false });
-                console.log(`\n🌐 http://localhost:${PORT}\n`);
-            }
-            
-            // VERIFICAÇÃO EM DUAS ETAPAS DETECTADA
-            if (lastDisconnect?.error?.output?.statusCode === 401) {
-                const errorMsg = lastDisconnect?.error?.message || '';
-                
-                if (errorMsg.includes('2fa') || errorMsg.includes('two-factor') || errorMsg.includes('pin')) {
-                    console.log('\n🔐 Verificação em duas etapas detectada!\n');
-                    
-                    const pin = await pedirPIN();
-                    
-                    // Tenta reconectar com o PIN
-                    console.log('🔄 Tentando conectar com PIN...\n');
-                    
-                    // Aqui precisamos reiniciar com o PIN
-                    // O Baileys não tem suporte nativo muito bom para 2FA
-                    // Mas vamos tentar uma abordagem alternativa
-                    
-                    console.log('⚠️  NOTA: O Baileys tem limitações com 2FA');
-                    console.log('💡 Solução recomendada:');
-                    console.log('   1. Desative a verificação em duas etapas temporariamente');
-                    console.log('   2. Conecte o bot');
-                    console.log('   3. Reative a verificação em duas etapas');
-                    console.log('');
-                    
-                    twoFactorCode = null;
-                }
+                console.log('✅ QR Code recebido!');
+                await salvarQRCode(qr);
+                tentativasConexao = 0;
             }
             
             // CONEXÃO FECHADA
             if (connection === 'close') {
                 botConectado = false;
                 qrCodeDataURL = null;
-                twoFactorCode = null;
+                reconectando = false;
                 
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const errorMessage = lastDisconnect?.error?.message || '';
+                const erroMsg = lastDisconnect?.error?.message || '';
                 
-                console.log('\n❌ CONEXÃO FECHADA');
-                console.log('Código:', statusCode);
-                console.log('Erro:', errorMessage);
-                
-                // Se for erro de 2FA, não reconecta automaticamente
-                if (errorMessage.includes('2fa') || errorMessage.includes('pin')) {
-                    console.log('\n🔐 Parece ser erro de verificação em duas etapas');
-                    console.log('Desative temporariamente no celular:');
-                    console.log('WhatsApp → Configurações → Conta → Verificação em duas etapas → DESATIVAR\n');
-                    return;
-                }
+                console.log(`\n❌ CONEXÃO FECHADA!`);
+                console.log(`   Código: ${statusCode}`);
+                console.log(`   Erro: ${erroMsg}`);
                 
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
-                if (shouldReconnect && tentativas < 5) {
-                    const delay = Math.min(5000 * tentativas, 30000);
-                    console.log(`⏳ Reconectando em ${delay/1000}s...\n`);
-                    setTimeout(conectar, delay);
+                if (shouldReconnect) {
+                    console.log(`\n⏳ Reconectando em ${delayMs/1000}s...\n`);
+                    setTimeout(connectToWhatsApp, delayMs);
+                } else {
+                    console.log('\n🚫 Logout detectado. Não reconectando.\n');
                 }
             }
             
-            // CONECTADO
+            // CONECTADO COM SUCESSO
             else if (connection === 'open') {
                 botConectado = true;
                 qrCodeDataURL = null;
-                twoFactorCode = null;
-                tentativas = 0;
+                qrCodeRaw = null;
+                tentativasConexao = 0;
+                reconectando = false;
                 
-                console.log('\n✅✅✅ CONECTADO! ✅✅✅\n');
-                console.log('📱 Número:', sock.user?.id?.split(':')[0]);
-                
+                // Limpa arquivos QR
                 try {
                     if (fs.existsSync('qrcode.png')) fs.unlinkSync('qrcode.png');
-                } catch(e) {}
+                    if (fs.existsSync('qrcode.txt')) fs.unlinkSync('qrcode.txt');
+                } catch (e) {}
+                
+                console.log('\n✅✅✅ BOT CONECTADO COM SUCESSO! ✅✅✅');
+                console.log('📱 Número:', sock.user?.id?.split(':')[0]);
+                console.log('👤 Nome:', sock.user?.name || 'Bot');
+                console.log('');
+            }
+            
+            else if (connection === 'connecting') {
+                console.log('⏳ Conectando...');
             }
         });
 
+        // SALVA CREDENCIAIS
         sock.ev.on('creds.update', saveCreds);
 
+        // ==========================================
+        // PROCESSAMENTO DE MENSAGENS
+        // ==========================================
+        
+        sock.ev.on('messages.upsert', async (m) => {
+            const msg = m.messages[0];
+            if (!msg.message || msg.key.fromMe) return;
+
+            const msgId = msg.key.id;
+            const participant = msg.key.participant || msg.key.remoteJid;
+            const uniqueId = `${msgId}_${participant}`;
+            
+            // Anti-duplicado
+            if (mensagensProcessadas.has(uniqueId)) return;
+            mensagensProcessadas.add(uniqueId);
+            if (mensagensProcessadas.size > 1000) {
+                const iterator = mensagensProcessadas.values();
+                mensagensProcessadas.delete(iterator.next().value);
+            }
+
+            const sender = msg.key.remoteJid;
+            const isGroup = sender.endsWith('@g.us');
+            const pushName = msg.pushName || 'Cliente';
+            
+            // Extrai texto
+            let text = '';
+            if (msg.message.conversation) text = msg.message.conversation;
+            else if (msg.message.extendedTextMessage) text = msg.message.extendedTextMessage.text;
+            else if (msg.message.buttonsResponseMessage) text = msg.message.buttonsResponseMessage.selectedButtonId;
+            else if (msg.message.listResponseMessage) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+            else if (msg.message.documentMessage) text = '[documento]';
+
+            text = text.toLowerCase().trim();
+            
+            console.log(`\n📩 ${pushName} (${sender.split('@')[0]}): "${text}"`);
+            
+            // Comandos em grupo precisam de !
+            if (isGroup) {
+                if (!text.startsWith('!')) return;
+                text = text.substring(1).trim();
+            }
+
+            const isAdmin = verificarAdmin(sender);
+            const perfil = db.getPerfil(sender);
+            const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
+            const userState = userStates.get(sender) || { step: 'menu' };
+
+            try {
+                // ========== COMANDO ADMIN ==========
+                if (text === 'admin' || text === 'adm') {
+                    if (isAdmin) {
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await sock.sendMessage(sender, { text: getMenuAdmin() });
+                    } else {
+                        await sock.sendMessage(sender, { text: '⛔ *Acesso Negado*' });
+                    }
+                    return;
+                }
+
+                // ========== MENU PRINCIPAL ==========
+                if (userState.step === 'menu') {
+                    // Se teste expirou, limita opções
+                    if (testeExpirado && !isAdmin) {
+                        if (text === '1') {
+                            await sock.sendMessage(sender, { text: `💰 Preços:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Fale com: +${ADMIN_NUMBER}` });
+                        } else if (text === '2') {
+                            await sock.sendMessage(sender, { text: '👑 Chamando admin...' });
+                            await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `🚨 CLIENTE QUER COMPRAR!\n\n${pushName}\n${sender.split('@')[0]}` });
+                        } else {
+                            await sock.sendMessage(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
+                        }
+                        return;
+                    }
+
+                    switch(text) {
+                        case '1':
+                            await sock.sendMessage(sender, { text: `💰 *Preços:*\n\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Para comprar, fale com:\n+${ADMIN_NUMBER}` });
+                            break;
+                            
+                        case '2':
+                            userStates.set(sender, { step: 'resgatar_key' });
+                            await sock.sendMessage(sender, { text: '🎁 Digite sua key no formato:\n*NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
+                            break;
+                            
+                        case '3':
+                            if (!db.verificarAcesso(sender)) {
+                                await sock.sendMessage(sender, { text: '❌ Você precisa de uma key ativa!\n\nDigite 2 para resgatar ou 6 para teste grátis.' });
+                                return;
+                            }
+                            const jogos = db.getJogosDisponiveisPorCategoria();
+                            let msg = '🎮 *Jogos disponíveis:*\n\n';
+                            for (const [cat, lista] of Object.entries(jogos)) {
+                                msg += `*${cat}*\n`;
+                                lista.slice(0, 5).forEach((j, i) => msg += `${i + 1}. ${j.jogo}\n`);
+                                if (lista.length > 5) msg += `...e mais ${lista.length - 5}\n`;
+                                msg += '\n';
+                            }
+                            msg += '🔍 Digite o *nome do jogo* que deseja:';
+                            userStates.set(sender, { step: 'buscar_jogo' });
+                            await sock.sendMessage(sender, { text: msg });
+                            break;
+                            
+                        case '4':
+                            if (!db.verificarAcesso(sender)) {
+                                await sock.sendMessage(sender, { text: '❌ Precisa de key ativa! Digite 2 ou 6' });
+                                return;
+                            }
+                            const listaJogos = db.getJogosDisponiveisPorCategoria();
+                            let msgLista = '📋 *Lista de Jogos:*\n\n';
+                            let total = 0;
+                            for (const [cat, lista] of Object.entries(listaJogos)) {
+                                msgLista += `*${cat}* (${lista.length})\n`;
+                                lista.forEach((j, i) => msgLista += `  ${i + 1}. ${j.jogo}\n`);
+                                total += lista.length;
+                            }
+                            msgLista += `\n🎮 *Total: ${total} jogos*`;
+                            await sock.sendMessage(sender, { text: msgLista });
+                            break;
+                            
+                        case '5':
+                            const p = db.getPerfil(sender);
+                            const numLimpo = sender.split('@')[0];
+                            const tempoUso = calcularTempoUso(p.dataRegistro);
+                            const keysResgatadas = p.keysResgatadas ? p.keysResgatadas.length : 0;
+                            
+                            let msgPerfil = `👤 *MEU PERFIL*\n\n`;
+                            msgPerfil += `🪪 *Nome:* ${p.nome || pushName}\n`;
+                            msgPerfil += `📱 *Número:* ${numLimpo}\n`;
+                            msgPerfil += `⏱️ *Status:* ${p.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
+                            msgPerfil += `🎮 *Keys Resgatadas:* ${keysResgatadas}\n`;
+                            msgPerfil += `📅 *Cliente há:* ${tempoUso}\n`;
+                            
+                            if (p.keyInfo) {
+                                msgPerfil += `\n🔑 *Última Key:* ${p.keyInfo.key}\n`;
+                                msgPerfil += `📆 *Expira:* ${p.keyInfo.expira}\n`;
+                            }
+                            
+                            if (p.usouTeste && !p.temAcesso) {
+                                msgPerfil += `\n😢 *Seu teste expirou!*\nCompre uma key para continuar.`;
+                            }
+                            
+                            if (p.acessoPermanente) {
+                                msgPerfil += `\n\n👑 *Você é Admin Premium!* 🌟`;
+                            }
+                            
+                            await sock.sendMessage(sender, { text: msgPerfil });
+                            break;
+                            
+                        case '6':
+                            userStates.set(sender, { step: 'resgatar_key_teste' });
+                            await sock.sendMessage(sender, { text: '🎉 *Teste Grátis*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ *Apenas 1 teste por pessoa!*\n\nDigite o número:' });
+                            break;
+                            
+                        case '0':
+                            await sock.sendMessage(sender, { text: '💬 Chamando atendente... Aguarde.' });
+                            await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 Cliente solicitou atendente:\n\n*${pushName}*\n${sender.split('@')[0]}\n\nDigite para responder.` });
+                            break;
+                            
+                        default:
+                            await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                    }
+                }
+                
+                // ========== RESGATAR KEY ==========
+                else if (userState.step === 'resgatar_key') {
+                    const key = text.toUpperCase().replace(/\s/g, '');
+                    
+                    // Verifica master key
+                    if (key === ADMIN_MASTER_KEY) {
+                        const resultado = db.resgatarMasterKey(key, sender, pushName);
+                        if (resultado.sucesso) {
+                            userStates.set(sender, { step: 'menu' });
+                            await sock.sendMessage(sender, { 
+                                text: `👑 *MASTER KEY ATIVADA!*\n\n🎉 Parabéns ${pushName}!\nVocê agora é *ADMINISTRADOR PERMANENTE*!\n\n⚠️ Esta key foi bloqueada após uso.\n\n🔧 Digite: *admin* para acessar o painel.` 
+                            });
+                            await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                                text: `🚨 *MASTER KEY USADA!*\n\n👤 ${pushName}\n📱 ${sender.split('@')[0]}\n⏰ ${new Date().toLocaleString()}` 
+                            });
+                        } else {
+                            await sock.sendMessage(sender, { text: `❌ *${resultado.erro}*` });
+                        }
+                        return;
+                    }
+                    
+                    // Valida formato
+                    if (!key.match(/^NYUX-[A-Z0-9]{4}-[A-Z0-9]{4}$/)) {
+                        await sock.sendMessage(sender, { text: '❌ *Formato inválido!*\n\nUse: *NYUX-XXXX-XXXX*\n\n_Exemplo: NYUX-AB12-CD34_' });
+                        return;
+                    }
+                    
+                    const resultado = db.resgatarKey(key, sender, pushName);
+                    if (resultado.sucesso) {
+                        userStates.set(sender, { step: 'menu' });
+                        await sock.sendMessage(sender, { 
+                            text: `✅ *KEY RESGATADA COM SUCESSO!*\n\n🎆 *Plano:* ${resultado.plano}\n⏱️ *Duração:* ${resultado.duracao}\n📅 *Expira em:* ${resultado.expira}\n\n🎮 Seu acesso foi liberado!\nDigite *menu* para ver as opções.` 
+                        });
+                    } else {
+                        await sock.sendMessage(sender, { text: `❌ *Erro:* ${resultado.erro}` });
+                    }
+                }
+                
+                // ========== TESTE GRÁTIS ==========
+                else if (userState.step === 'resgatar_key_teste') {
+                    let duracao, horas;
+                    
+                    if (text === '1') { duracao = '1 hora'; horas = 1; }
+                    else if (text === '2') { duracao = '2 horas'; horas = 2; }
+                    else if (text === '3') { duracao = '6 horas'; horas = 6; }
+                    else {
+                        await sock.sendMessage(sender, { text: '❌ Opção inválida!\n\nDigite:\n1️⃣ para 1 hora\n2️⃣ para 2 horas\n3️⃣ para 6 horas' });
+                        return;
+                    }
+                    
+                    // Verifica se já usou teste
+                    if (db.verificarTesteUsado(sender)) {
+                        userStates.set(sender, { step: 'menu' });
+                        await sock.sendMessage(sender, { text: '❌ *Você já usou seu teste grátis!*\n\n💰 Compre uma key:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Fale com: +' + ADMIN_NUMBER });
+                        return;
+                    }
+                    
+                    // Gera key de teste
+                    const keyTeste = `TESTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+                    const resultado = db.criarKeyTeste(keyTeste, duracao, horas, sender, pushName);
+                    
+                    if (resultado.sucesso) {
+                        userStates.set(sender, { step: 'menu' });
+                        await sock.sendMessage(sender, { 
+                            text: `🎉 *TESTE ATIVADO!*\n\n🔑 *Key:* ${keyTeste}\n⏱️ *Duração:* ${duracao}\n📅 *Expira em:* ${resultado.expira}\n\n✅ *Acesso liberado!*\n\nAproveite para testar nossos jogos!\nDigite *menu* para começar.` 
+                        });
+                    } else {
+                        await sock.sendMessage(sender, { text: `❌ Erro: ${resultado.erro}` });
+                    }
+                }
+                
+                // ========== BUSCAR JOGO ==========
+                else if (userState.step === 'buscar_jogo') {
+                    const conta = db.buscarConta(text);
+                    
+                    if (conta) {
+                        userStates.set(sender, { step: 'menu' });
+                        await sock.sendMessage(sender, {
+                            text: `🎮 *${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 *Login:* ${conta.login}\n🔒 *Senha:* ${conta.senha}\n\n⚠️ *IMPORTANTE:*\n• Use modo OFFLINE\n• NÃO altere a senha\n• NÃO compartilhe esta conta\n\n🎮 Bom jogo!` 
+                        });
+                    } else {
+                        await sock.sendMessage(sender, { text: `❌ Jogo *"${text}"* não encontrado.\n\n🔍 Tente digitar o nome exato ou digite *4* para ver a lista completa.` });
+                    }
+                }
+                
+                // ========== MENU ADMIN ==========
+                else if (userState.step === 'admin_menu' && isAdmin) {
+                    switch(text) {
+                        case '1': // Adicionar conta
+                            userStates.set(sender, { step: 'admin_add_nome', tempConta: {} });
+                            await sock.sendMessage(sender, { text: '➕ *Adicionar Conta*\n\nDigite o *nome do jogo*:' });
+                            break;
+                            
+                        case '2': // Gerar key
+                            userStates.set(sender, { step: 'admin_gerar_key' });
+                            await sock.sendMessage(sender, { text: '🔑 *Gerar Key*\n\nEscolha o plano:\n\n1️⃣ 7 dias - R$ 10\n2️⃣ 1 mês - R$ 25\n3️⃣ Lifetime - R$ 80\n\nDigite o número:' });
+                            break;
+                            
+                        case '3': // Gerar key teste
+                            userStates.set(sender, { step: 'admin_gerar_teste' });
+                            await sock.sendMessage(sender, { text: '🎁 *Gerar Key Teste*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\nDigite o número:' });
+                            break;
+                            
+                        case '4': // Importar
+                            userStates.set(sender, { step: 'admin_importar' });
+                            await sock.sendMessage(sender, { text: '📄 *Importar Contas*\n\nEnvie o arquivo *.txt* com as contas no formato:\n\nJogo | Categoria | Login | Senha\n\nOu cole o texto aqui.' });
+                            break;
+                            
+                        case '5': // Estatísticas
+                            const stats = db.getEstatisticas();
+                            await sock.sendMessage(sender, { 
+                                text: `📊 *Estatísticas*\n\n🎮 Total de jogos: ${stats.totalJogos}\n✅ Disponíveis: ${stats.disponiveis}\n🔑 Keys ativas: ${stats.keysAtivas}\n👥 Clientes: ${stats.totalClientes}\n🔐 Master Key: ${stats.masterKeyUsada ? 'Usada' : 'Disponível'}` 
+                            });
+                            break;
+                            
+                        case '6': // Listar jogos
+                            const todosJogos = db.getTodosJogosDisponiveis();
+                            let msgJogos = '📋 *Todos os Jogos:*\n\n';
+                            todosJogos.forEach((j, i) => {
+                                msgJogos += `${i + 1}. ${j.jogo} (${j.categoria})\n`;
+                            });
+                            msgJogos += `\nTotal: ${todosJogos.length} jogos`;
+                            await sock.sendMessage(sender, { text: msgJogos });
+                            break;
+                            
+                        case '7': // Broadcast
+                            userStates.set(sender, { step: 'admin_broadcast' });
+                            await sock.sendMessage(sender, { text: '📢 *Broadcast*\n\nDigite a mensagem que será enviada para *todos* os clientes:' });
+                            break;
+                            
+                        case '8': // Remover conta
+                            userStates.set(sender, { step: 'admin_remover_lista', tempLista: db.getTodosJogosDisponiveis() });
+                            const jogosRemover = db.getTodosJogosDisponiveis();
+                            let msgRemover = '❌ *Remover Conta*\n\n';
+                            jogosRemover.slice(0, 15).forEach((j, i) => {
+                                msgRemover += `${i + 1}. ${j.jogo}\n`;
+                            });
+                            if (jogosRemover.length > 15) msgRemover += `...e mais ${jogosRemover.length - 15}\n`;
+                            msgRemover += '\nDigite o *número* ou *nome* do jogo:';
+                            await sock.sendMessage(sender, { text: msgRemover });
+                            break;
+                            
+                        case '9': // Entrar em grupo
+                            await sock.sendMessage(sender, { 
+                                text: `👥 *Entrar em Grupo*\n\n1️⃣ Adicione o número *+${BOT_NUMBER}* no grupo\n2️⃣ Dê permissão de *ADMIN*\n3️⃣ Digite *!menu* no grupo\n\n⚠️ O bot só responde comandos que começam com ! em grupos` 
+                            });
+                            break;
+                            
+                        case '0':
+                        case 'menu':
+                            userStates.set(sender, { step: 'menu' });
+                            await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                            break;
+                            
+                        default:
+                            await sock.sendMessage(sender, { text: getMenuAdmin() });
+                    }
+                }
+                
+                // ========== ADMIN: ADICIONAR CONTA ==========
+                else if (userState.step === 'admin_add_nome' && isAdmin) {
+                    const temp = userState.tempConta || {};
+                    temp.jogo = text;
+                    userStates.set(sender, { step: 'admin_add_cat', tempConta: temp });
+                    
+                    const categorias = [
+                        '🗡️ Ação', '🔫 Tiro', '🧟 Terror', '⚽ Esportes',
+                        '🏎️ Corrida', '🎲 RPG', '🥊 Luta', '🕵️ Aventura',
+                        '👻 Survival', '🚀 Estratégia', '🎯 Simulação', '🎮 Indie'
+                    ];
+                    
+                    let msgCat = '➕ Escolha a *categoria*:\n\n';
+                    categorias.forEach((cat, i) => {
+                        msgCat += `${i + 1}. ${cat}\n`;
+                    });
+                    await sock.sendMessage(sender, { text: msgCat });
+                }
+                
+                else if (userState.step === 'admin_add_cat' && isAdmin) {
+                    const cats = ['Ação', 'Tiro', 'Terror', 'Esportes', 'Corrida', 'RPG', 'Luta', 'Aventura', 'Survival', 'Estratégia', 'Simulação', 'Indie'];
+                    const escolha = parseInt(text) - 1;
+                    
+                    if (escolha >= 0 && escolha < cats.length) {
+                        const temp = userState.tempConta || {};
+                        temp.categoria = cats[escolha];
+                        userStates.set(sender, { step: 'admin_add_login', tempConta: temp });
+                        await sock.sendMessage(sender, { text: '➕ Digite o *login* (e-mail ou usuário):' });
+                    } else {
+                        await sock.sendMessage(sender, { text: '❌ Categoria inválida! Digite um número de 1 a 12:' });
+                    }
+                }
+                
+                else if (userState.step === 'admin_add_login' && isAdmin) {
+                    const temp = userState.tempConta || {};
+                    temp.login = text;
+                    userStates.set(sender, { step: 'admin_add_senha', tempConta: temp });
+                    await sock.sendMessage(sender, { text: '➕ Digite a *senha*:' });
+                }
+                
+                else if (userState.step === 'admin_add_senha' && isAdmin) {
+                    const temp = userState.tempConta || {};
+                    temp.senha = text;
+                    
+                    db.addConta(temp.jogo, temp.categoria, temp.login, temp.senha);
+                    userStates.set(sender, { step: 'admin_menu' });
+                    
+                    await sock.sendMessage(sender, {
+                        text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}` 
+                    });
+                }
+                
+                // ========== ADMIN: GERAR KEY ==========
+                else if (userState.step === 'admin_gerar_key' && isAdmin) {
+                    let plano, dias;
+                    
+                    if (text === '1') { plano = '7 dias'; dias = 7; }
+                    else if (text === '2') { plano = '1 mês'; dias = 30; }
+                    else if (text === '3') { plano = 'Lifetime'; dias = 99999; }
+                    else {
+                        await sock.sendMessage(sender, { text: '❌ Opção inválida! Digite 1, 2 ou 3:' });
+                        return;
+                    }
+                    
+                    const key = `NYUX-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+                    db.criarKey(key, plano, dias);
+                    userStates.set(sender, { step: 'admin_menu' });
+                    
+                    await sock.sendMessage(sender, {
+                        text: `🔑 *KEY GERADA!*\n\n*${key}*\n\n⏱️ Plano: ${plano}\n💰 Valor: ${text === '1' ? 'R$ 10' : text === '2' ? 'R$ 25' : 'R$ 80'}\n\n✅ Key pronta para venda!` 
+                    });
+                }
+                
+                // ========== ADMIN: GERAR KEY TESTE ==========
+                else if (userState.step === 'admin_gerar_teste' && isAdmin) {
+                    let duracao, horas;
+                    
+                    if (text === '1') { duracao = '1 hora'; horas = 1; }
+                    else if (text === '2') { duracao = '2 horas'; horas = 2; }
+                    else if (text === '3') { duracao = '6 horas'; horas = 6; }
+                    else {
+                        await sock.sendMessage(sender, { text: '❌ Opção inválida! Digite 1, 2 ou 3:' });
+                        return;
+                    }
+                    
+                    const key = `TESTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+                    db.criarKey(key, duracao, horas, true);
+                    userStates.set(sender, { step: 'admin_menu' });
+                    
+                    await sock.sendMessage(sender, {
+                        text: `🎁 *KEY TESTE GERADA!*\n\n*${key}*\n\n⏱️ Duração: ${duracao}\n\nEnvie para o cliente!` 
+                    });
+                }
+                
+                // ========== ADMIN: IMPORTAR ==========
+                else if (userState.step === 'admin_importar' && isAdmin) {
+                    if (msg.message.documentMessage) {
+                        await sock.sendMessage(sender, { text: '⏳ Processando arquivo...' });
+                        
+                        try {
+                            const stream = await sock.downloadContentFromMessage(msg.message.documentMessage, 'document');
+                            let buffer = Buffer.from([]);
+                            for await (const chunk of stream) {
+                                buffer = Buffer.concat([buffer, chunk]);
+                            }
+                            
+                            const texto = buffer.toString('utf-8');
+                            const resultado = db.importarTXTInteligente(texto);
+                            
+                            userStates.set(sender, { step: 'admin_menu' });
+                            
+                            if (resultado.sucesso) {
+                                await sock.sendMessage(sender, {
+                                    text: `✅ *Importação concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categoriasDetectadas} categorias\n\n⚠️ ${resultado.ignoradas} ignoradas\n❌ ${resultado.erros} erros` 
+                                });
+                            } else {
+                                await sock.sendMessage(sender, { text: '❌ Nenhuma conta foi adicionada. Verifique o formato do arquivo.' });
+                            }
+                        } catch (err) {
+                            await sock.sendMessage(sender, { text: '❌ Erro ao processar arquivo.' });
+                        }
+                    } else {
+                        // Tenta processar como texto colado
+                        const resultado = db.importarTXTInteligente(text);
+                        if (resultado.sucesso && resultado.adicionadas > 0) {
+                            userStates.set(sender, { step: 'admin_menu' });
+                            await sock.sendMessage(sender, {
+                                text: `✅ *Importação concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas` 
+                            });
+                        } else {
+                            await sock.sendMessage(sender, { text: '📄 Envie um arquivo .txt ou cole o texto com as contas:' });
+                        }
+                    }
+                }
+                
+                // ========== ADMIN: BROADCAST ==========
+                else if (userState.step === 'admin_broadcast' && isAdmin) {
+                    const clientes = db.getTodosClientes();
+                    let enviados = 0;
+                    
+                    await sock.sendMessage(sender, { text: `📢 Enviando para ${clientes.length} clientes...` });
+                    
+                    for (const cliente of clientes) {
+                        try {
+                            await sock.sendMessage(cliente.numero, {
+                                text: `📢 *${STORE_NAME}*\n\n${text}\n\n_Para parar de receber, diga ao administrador._` 
+                            });
+                            enviados++;
+                            await delay(1500); // Evita flood
+                        } catch (e) {
+                            console.log('Erro ao enviar para:', cliente.numero);
+                        }
+                    }
+                    
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await sock.sendMessage(sender, { text: `✅ Broadcast enviado!\n\n📊 ${enviados}/${clientes.length} clientes alcançados.` });
+                }
+                
+                // ========== ADMIN: REMOVER CONTA ==========
+                else if (userState.step === 'admin_remover_lista' && isAdmin) {
+                    const escolha = parseInt(text);
+                    const lista = userState.tempLista || db.getTodosJogosDisponiveis();
+                    
+                    if (!isNaN(escolha) && escolha > 0 && escolha <= lista.length) {
+                        const conta = lista[escolha - 1];
+                        userStates.set(sender, { 
+                            step: 'admin_remover_confirmar', 
+                            tempConta: conta,
+                            tempLista: lista 
+                        });
+                        await sock.sendMessage(sender, { 
+                            text: `❌ *Confirmar remoção?*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\nDigite *sim* para confirmar ou *não* para cancelar:` 
+                        });
+                    } else {
+                        // Busca por nome
+                        const resultado = db.buscarConta(text);
+                        if (resultado) {
+                            userStates.set(sender, { 
+                                step: 'admin_remover_confirmar', 
+                                tempConta: resultado,
+                                tempLista: lista 
+                            });
+                            await sock.sendMessage(sender, { 
+                                text: `❌ *Confirmar remoção?*\n\n🎮 ${resultado.jogo}\n👤 ${resultado.login}\n\nDigite *sim* para confirmar ou *não* para cancelar:` 
+                            });
+                        } else {
+                            await sock.sendMessage(sender, { text: '❌ Conta não encontrada. Digite o número ou nome correto:' });
+                        }
+                    }
+                }
+                
+                else if (userState.step === 'admin_remover_confirmar' && isAdmin) {
+                    if (text === 'sim' || text === 's') {
+                        const conta = userState.tempConta;
+                        const resultado = db.removerConta(conta.jogo, conta.login);
+                        
+                        if (resultado.sucesso) {
+                            userStates.set(sender, { step: 'admin_menu' });
+                            await sock.sendMessage(sender, { 
+                                text: `✅ *Conta removida!*\n\n🎮 ${conta.jogo}\n👤 ${conta.login}\n\n📊 Total restante: ${resultado.totalRestante} contas` 
+                            });
+                        } else {
+                            await sock.sendMessage(sender, { text: `❌ Erro: ${resultado.erro}` });
+                        }
+                    } else {
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await sock.sendMessage(sender, { text: '✅ Cancelado. Voltando ao menu admin.' });
+                    }
+                }
+                
+                // ========== COMANDO MENU/VOLTAR ==========
+                if (text === 'menu' || text === 'voltar') {
+                    userStates.set(sender, { step: 'menu' });
+                    const perfilAtual = db.getPerfil(sender);
+                    
+                    if (perfilAtual.usouTeste && !perfilAtual.temAcesso && !isAdmin) {
+                        await sock.sendMessage(sender, { text: `😢 *Teste Expirado*\n\n1️⃣ Comprar Key\n2️⃣ Falar com Admin\n\n0️⃣ Atendente` });
+                    } else {
+                        await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                    }
+                }
+
+            } catch (error) {
+                console.error('❌ Erro ao processar mensagem:', error);
+            }
+        });
+
     } catch (err) {
-        console.error('\n❌ ERRO:', err.message);
-        setTimeout(conectar, 10000);
+        console.error('\n❌ ERRO FATAL:', err.message);
+        reconectando = false;
+        setTimeout(connectToWhatsApp, 10000);
     }
 }
 
-console.log('🚀 Iniciando...\n');
-console.log('⚠️  Se você tem verificação em duas etapas ativa:');
-console.log('   O WhatsApp vai pedir um PIN de 6 dígitos');
-console.log('   Digite no terminal quando pedir\n');
-
-conectar();
+// Inicia
+console.log('⏳ Iniciando em 3 segundos...\n');
+setTimeout(connectToWhatsApp, 3000);
