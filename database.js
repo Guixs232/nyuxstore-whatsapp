@@ -30,6 +30,7 @@ class NyuxDatabase {
                 key_code TEXT UNIQUE NOT NULL,
                 duracao TEXT NOT NULL,
                 dias INTEGER NOT NULL,
+                is_teste INTEGER DEFAULT 0,
                 criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 usado_por TEXT,
                 usado_em TIMESTAMP,
@@ -47,6 +48,7 @@ class NyuxDatabase {
                 tem_acesso INTEGER DEFAULT 0,
                 key_ativa TEXT,
                 expira_em TIMESTAMP,
+                usou_teste INTEGER DEFAULT 0,
                 total_resgates INTEGER DEFAULT 0,
                 data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -80,22 +82,6 @@ class NyuxDatabase {
     getContaPorId(id) {
         const stmt = this.db.prepare('SELECT * FROM contas WHERE id = ?');
         return stmt.get(id);
-    }
-
-    marcarContaUsada(id, numeroCliente) {
-        const stmt = this.db.prepare('UPDATE contas SET status = ?, usado_por = ?, data_usado = ? WHERE id = ?');
-        stmt.run('usado', numeroCliente, moment().format('YYYY-MM-DD HH:mm:ss'), id);
-        stmt.finalize();
-
-        // Incrementa resgates do cliente
-        const upd = this.db.prepare('UPDATE clientes SET total_resgates = total_resgates + 1 WHERE numero = ?');
-        upd.run(numeroCliente);
-        upd.finalize();
-
-        // Registra resgate
-        const ins = this.db.prepare('INSERT INTO resgates (cliente_numero, conta_id) VALUES (?, ?)');
-        ins.run(numeroCliente, id);
-        ins.finalize();
     }
 
     // Lista de jogos disponíveis (SEM senha) - agrupado por categoria
@@ -139,12 +125,53 @@ class NyuxDatabase {
         return resultado;
     }
 
-    // Keys
-    criarKey(key, duracao, dias) {
+    // Keys normais
+    criarKey(key, duracao, dias, isTeste = false) {
         const expira = moment().add(dias, 'days').format('YYYY-MM-DD HH:mm:ss');
-        const stmt = this.db.prepare('INSERT INTO keys (key_code, duracao, dias, expira_em) VALUES (?, ?, ?, ?)');
-        stmt.run(key, duracao, dias, expira);
+        const stmt = this.db.prepare('INSERT INTO keys (key_code, duracao, dias, is_teste, expira_em) VALUES (?, ?, ?, ?, ?)');
+        stmt.run(key, duracao, dias, isTeste ? 1 : 0, expira);
         stmt.finalize();
+    }
+
+    // Key teste - verifica se já usou
+    verificarTesteUsado(numero) {
+        const stmt = this.db.prepare('SELECT usou_teste FROM clientes WHERE numero = ?');
+        const cliente = stmt.get(numero);
+        return cliente && cliente.usou_teste === 1;
+    }
+
+    // Criar key teste e ativar para o usuário
+    criarKeyTeste(key, duracao, horas, numero, nome) {
+        // Verifica se já usou teste
+        if (this.verificarTesteUsado(numero)) {
+            return { sucesso: false, erro: 'Você já utilizou seu teste grátis.' };
+        }
+
+        const expira = moment().add(horas, 'hours').format('YYYY-MM-DD HH:mm:ss');
+        
+        // Insere a key
+        const stmt = this.db.prepare('INSERT INTO keys (key_code, duracao, dias, is_teste, expira_em, usado_por, usado_em) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        stmt.run(key, duracao, horas, 1, expira, numero, moment().format('YYYY-MM-DD HH:mm:ss'));
+        stmt.finalize();
+
+        // Atualiza ou cria cliente com teste usado
+        const checkCliente = this.db.prepare('SELECT * FROM clientes WHERE numero = ?');
+        const cliente = checkCliente.get(numero);
+
+        if (cliente) {
+            const upd = this.db.prepare('UPDATE clientes SET tem_acesso = 1, key_ativa = ?, expira_em = ?, nome = ?, usou_teste = 1 WHERE numero = ?');
+            upd.run(key, expira, nome, numero);
+            upd.finalize();
+        } else {
+            const ins = this.db.prepare('INSERT INTO clientes (numero, nome, tem_acesso, key_ativa, expira_em, usou_teste) VALUES (?, ?, 1, ?, ?, 1)');
+            ins.run(numero, nome, key, expira);
+            ins.finalize();
+        }
+
+        return {
+            sucesso: true,
+            expira: moment(expira).format('DD/MM/YYYY HH:mm')
+        };
     }
 
     resgatarKey(key, numeroCliente, nomeCliente) {
@@ -195,7 +222,7 @@ class NyuxDatabase {
 
     getPerfil(numero) {
         const stmt = this.db.prepare('SELECT * FROM clientes WHERE numero = ?');
-        const cliente = stmt.get(numero) || { tem_acesso: 0, total_resgates: 0 };
+        const cliente = stmt.get(numero) || { tem_acesso: 0, total_resgates: 0, usou_teste: 0 };
         
         const keyStmt = this.db.prepare('SELECT * FROM keys WHERE usado_por = ? AND ativa = 1 ORDER BY usado_em DESC LIMIT 1');
         const keyInfo = keyStmt.get(numero);
@@ -203,9 +230,11 @@ class NyuxDatabase {
         return {
             temAcesso: cliente.tem_acesso === 1,
             totalResgatados: cliente.total_resgates || 0,
+            usouTeste: cliente.usou_teste === 1,
             keyInfo: keyInfo ? {
                 key: keyInfo.key_code,
-                expira: moment(keyInfo.expira_em).format('DD/MM/YYYY')
+                expira: moment(keyInfo.expira_em).format('DD/MM/YYYY HH:mm'),
+                tipo: keyInfo.is_teste === 1 ? 'Teste' : 'Normal'
             } : null
         };
     }
@@ -311,7 +340,8 @@ class NyuxDatabase {
         const totalJogos = this.db.prepare('SELECT COUNT(*) as c FROM contas').get().c;
         const disponiveis = this.db.prepare('SELECT COUNT(*) as c FROM contas WHERE status = ?').get('disponivel').c;
         const usados = this.db.prepare('SELECT COUNT(*) as c FROM contas WHERE status = ?').get('usado').c;
-        const keysAtivas = this.db.prepare('SELECT COUNT(*) as c FROM keys WHERE ativa = 1').get().c;
+        const keysAtivas = this.db.prepare('SELECT COUNT(*) as c FROM keys WHERE ativa = 1 AND is_teste = 0').get().c;
+        const keysTeste = this.db.prepare('SELECT COUNT(*) as c FROM keys WHERE ativa = 1 AND is_teste = 1').get().c;
         const totalClientes = this.db.prepare('SELECT COUNT(*) as c FROM clientes').get().c;
         const totalCategorias = this.db.prepare('SELECT COUNT(DISTINCT categoria) as c FROM contas').get().c;
 
@@ -320,6 +350,7 @@ class NyuxDatabase {
             disponiveis,
             usados,
             keysAtivas,
+            keysTeste,
             totalClientes,
             totalCategorias
         };
