@@ -5,23 +5,22 @@ const http = require('http');
 const Database = require('./database');
 const moment = require('moment');
 
-// Configurações - USE VARIÁVEL DE AMBIENTE DO RAILWAY
+// Configurações
 const BOT_NUMBER = '556183040115';
 const ADMIN_NUMBER = '5518997972598';
 const STORE_NAME = 'NyuxStore';
-const PORT = process.env.PORT || 8080; // Railway define PORT automaticamente
+const PORT = process.env.PORT || 8080;
 
 const db = new Database();
 const userStates = new Map();
 
-// Variáveis globais para QR Code
+// Variáveis globais
 let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
 
 // ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
-    // Headers CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
@@ -85,7 +84,6 @@ const server = http.createServer((req, res) => {
                 <div class="info">
                     <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
                     <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
-                    <p><strong>🌐 Porta:</strong> ${PORT}</p>
                 </div>
             </body>
             </html>
@@ -99,26 +97,14 @@ const server = http.createServer((req, res) => {
                 <head>
                     <title>Conectado - ${STORE_NAME}</title>
                     <style>
-                        body { 
-                            font-family: Arial, sans-serif; 
-                            text-align: center; 
-                            padding: 50px; 
-                            background: #1a1a2e;
-                            color: white;
-                        }
-                        .success { 
-                            background: #4CAF50; 
-                            padding: 40px; 
-                            border-radius: 20px;
-                            margin: 50px auto;
-                            max-width: 500px;
-                        }
+                        body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
+                        .success { background: #4CAF50; padding: 40px; border-radius: 20px; margin: 50px auto; max-width: 500px; }
                     </style>
                 </head>
                 <body>
                     <div class="success">
                         <h1>✅ Bot Já Conectado!</h1>
-                        <p>O bot está online e funcionando.</p>
+                        <p>O bot está online.</p>
                     </div>
                 </body>
                 </html>
@@ -132,7 +118,7 @@ const server = http.createServer((req, res) => {
                     <meta http-equiv="refresh" content="5">
                     <style>
                         body { 
-                            font-family: Arial, sans-serif; 
+                            font-family: Arial; 
                             text-align: center; 
                             padding: 20px; 
                             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -144,7 +130,6 @@ const server = http.createServer((req, res) => {
                             align-items: center;
                             justify-content: center;
                         }
-                        h1 { color: #00d9ff; }
                         .qr-container {
                             background: white;
                             padding: 30px;
@@ -194,17 +179,9 @@ const server = http.createServer((req, res) => {
                     <title>Gerando - ${STORE_NAME}</title>
                     <meta http-equiv="refresh" content="3">
                     <style>
-                        body { 
-                            font-family: Arial, sans-serif; 
-                            text-align: center; 
-                            padding: 50px; 
-                            background: #1a1a2e;
-                            color: white;
-                        }
-                        .loading {
-                            font-size: 28px;
-                            animation: pulse 1s infinite;
-                        }
+                        body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
+                        .loading { font-size: 28px; animation: pulse 1s infinite; }
+                        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
                     </style>
                 </head>
                 <body>
@@ -234,14 +211,13 @@ const server = http.createServer((req, res) => {
     }
 });
 
-// INICIA SERVIDOR PRIMEIRO (importante para Railway)
+// INICIA SERVIDOR PRIMEIRO
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Servidor web rodando na porta ${PORT}`);
-    console.log(`🔗 URL: http://localhost:${PORT}`);
-    console.log(`📱 QR Code: http://localhost:${PORT}/qr`);
+    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
 });
 
-// Função para atualizar QR Code na web
+// Função para atualizar QR Code
 async function atualizarQRCode(qr) {
     try {
         const QRCode = require('qrcode');
@@ -251,6 +227,8 @@ async function atualizarQRCode(qr) {
             color: { dark: '#000000', light: '#FFFFFF' }
         });
         console.log('📱 QR Code atualizado na web!');
+        // Também mostra no terminal
+        qrcode.generate(qr, { small: true });
     } catch (err) {
         console.error('Erro ao gerar QR Code:', err);
     }
@@ -328,7 +306,7 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
+        // REMOVIDO: printQRInTerminal (deprecated)
         auth: state,
         browser: ['NyuxStore Bot', 'Chrome', '1.0'],
         syncFullHistory: false,
@@ -342,10 +320,10 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
+        // NOVO: QR Code vem aqui agora
         if (qr) {
-            console.log('📱 Novo QR Code gerado!');
+            console.log('📱 Novo QR Code recebido!');
             await atualizarQRCode(qr);
-            qrcode.generate(qr, { small: true });
         }
         
         if (connection === 'close') {
