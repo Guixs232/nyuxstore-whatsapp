@@ -1,5 +1,6 @@
 const pino = require('pino');
 const fs = require('fs');
+const http = require('http');
 const Database = require('./database');
 const moment = require('moment');
 
@@ -81,9 +82,70 @@ _Digite o número da opção_
 `;
 }
 
+// Servidor HTTP para mostrar QR Code
+let qrCodeAtual = null;
+let qrCodeGerado = false;
+
+const server = http.createServer((req, res) => {
+    if (req.url === '/qr' && qrCodeAtual) {
+        // Gera página HTML com QR Code
+        res.writeHead(200, {'Content-Type': 'text/html'});
+        res.end(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>NyuxStore - QR Code</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body {
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        min-height: 100vh;
+                        margin: 0;
+                        background: #1a1a2e;
+                        color: white;
+                        font-family: Arial, sans-serif;
+                    }
+                    h1 { color: #00d4ff; }
+                    .qr-container {
+                        background: white;
+                        padding: 20px;
+                        border-radius: 10px;
+                        margin: 20px;
+                    }
+                    .info {
+                        margin-top: 20px;
+                        text-align: center;
+                        color: #888;
+                    }
+                </style>
+            </head>
+            <body>
+                <h1>📱 NyuxStore Bot</h1>
+                <div class="qr-container">
+                    <img src="${qrCodeAtual}" alt="QR Code" width="300" height="300">
+                </div>
+                <p>Escaneie com seu WhatsApp!</p>
+                <div class="info">
+                    <p>⏰ Válido por 60 segundos</p>
+                    <p>Atualize a página se expirar</p>
+                </div>
+            </body>
+            </html>
+        `);
+    } else if (req.url === '/qr') {
+        res.writeHead(200, {'Content-Type': 'text/html'});
+        res.end('<h1>Aguardando QR Code...</h1><p>Recarregue em alguns segundos</p>');
+    } else {
+        res.writeHead(200, {'Content-Type': 'text/html'});
+        res.end('<h1>NyuxStore Bot Online!</h1><p>Acesse <a href="/qr">/qr</a> para ver o QR Code</p>');
+    }
+});
+
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
-    // Importa Baileys dinamicamente (ES Module)
     const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -94,7 +156,7 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false, // Desabilita QR no terminal
+        printQRInTerminal: false,
         auth: state,
         browser: ['NyuxStore Bot', 'Chrome', '1.0'],
         syncFullHistory: false,
@@ -103,69 +165,65 @@ async function connectToWhatsApp() {
         shouldIgnoreJid: jid => false
     });
 
-    // Variável para controlar se já enviou QR
-    let qrEnviado = false;
-
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        if (qr && !qrEnviado) {
-            qrEnviado = true;
+        if (qr && !qrCodeGerado) {
+            qrCodeGerado = true;
             console.log('📱 Gerando QR Code...');
             
             try {
                 const QRCode = require('qrcode');
-                const path = '/app/qr-code.png';
                 
-                // Gera imagem do QR Code
-                await QRCode.toFile(path, qr, {
+                // Gera QR Code como Data URL (base64)
+                qrCodeAtual = await QRCode.toDataURL(qr, {
+                    width: 400,
+                    margin: 2,
                     color: {
                         dark: '#000000',
                         light: '#FFFFFF'
-                    },
-                    width: 600,
-                    margin: 3
+                    }
                 });
                 
                 console.log('✅ QR Code gerado!');
-                console.log('📤 Enviando para o admin...');
+                console.log('');
+                console.log('🌐 Acesse: http://localhost:3000/qr');
+                console.log('   ou a URL do Railway + /qr');
+                console.log('');
+                console.log('📱 Ou escaneie o QR Code abaixo:');
+                console.log('');
                 
-                // Espera 2 segundos para garantir que o socket está pronto
-                await delay(2000);
+                // Também mostra no terminal como fallback
+                const QRCodeTerminal = require('qrcode-terminal');
+                QRCodeTerminal.generate(qr, { small: false });
                 
-                // Envia para o admin
-                await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                    image: { url: path },
-                    caption: '📱 *QR Code para conectar o bot!*\n\nEscaneie agora para ativar o NyuxStore Bot\n\n⏰ Válido por 60 segundos'
-                });
+                console.log('');
+                console.log('⏰ QR Code válido por 60 segundos');
+                console.log('🔄 Recarregue a página se necessário');
                 
-                console.log('✅ QR Code enviado para +', ADMIN_NUMBER);
-                console.log('📱 Verifique seu WhatsApp!');
-                
-                // Remove o arquivo depois de 60 segundos
+                // Limpa após 60 segundos
                 setTimeout(() => {
-                    if (fs.existsSync(path)) {
-                        fs.unlinkSync(path);
-                        console.log('🗑️ QR Code removido');
-                    }
-                    qrEnviado = false;
+                    qrCodeAtual = null;
+                    qrCodeGerado = false;
+                    console.log('🗑️ QR Code expirado');
                 }, 60000);
                 
             } catch (err) {
-                console.error('❌ Erro ao enviar QR:', err);
-                console.log('🔧 Tente reiniciar o deploy');
+                console.error('❌ Erro:', err);
             }
         }
         
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
-            qrEnviado = false;
+            qrCodeGerado = false;
+            qrCodeAtual = null;
             if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
-            console.log('✅ Bot conectado ao WhatsApp!');
+            console.log('✅ Bot conectado!');
             console.log('📱 Número:', sock.user.id.split(':')[0]);
-            console.log('🤖 Nome:', sock.user.name);
+            qrCodeAtual = null;
+            qrCodeGerado = false;
         }
     });
 
@@ -173,593 +231,277 @@ async function connectToWhatsApp() {
 
     // Processar mensagens
     sock.ev.on('messages.upsert', async (m) => {
-        console.log('📩 Nova mensagem:', m.type);
-        
         const msg = m.messages[0];
-        
-        if (!msg.message || msg.key.fromMe) {
-            return;
-        }
+        if (!msg.message || msg.key.fromMe) return;
 
         const sender = msg.key.remoteJid;
         const isGroup = sender.endsWith('@g.us');
         const pushName = msg.pushName || 'Cliente';
         
-        console.log(`👤 De: ${pushName} (${sender})`);
-        console.log(`👥 Grupo: ${isGroup}`);
-
-        // Extrai texto da mensagem
         let text = '';
+        if (msg.message.conversation) text = msg.message.conversation;
+        else if (msg.message.extendedTextMessage) text = msg.message.extendedTextMessage.text;
+        else if (msg.message.buttonsResponseMessage) text = msg.message.buttonsResponseMessage.selectedButtonId;
+        else if (msg.message.listResponseMessage) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+        else if (msg.message.documentMessage) text = '[documento]';
         
-        if (msg.message.conversation) {
-            text = msg.message.conversation;
-        } else if (msg.message.extendedTextMessage) {
-            text = msg.message.extendedTextMessage.text;
-        } else if (msg.message.buttonsResponseMessage) {
-            text = msg.message.buttonsResponseMessage.selectedButtonId;
-        } else if (msg.message.listResponseMessage) {
-            text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
-        } else if (msg.message.documentMessage) {
-            text = '[documento]';
-        }
-
         text = text.toLowerCase().trim();
-        console.log(`💬 Texto: "${text}"`);
-
-        // Verifica se é admin
+        
         const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us', '').replace(/\D/g, '');
         const isAdmin = numeroLimpo === ADMIN_NUMBER.replace(/\D/g, '');
-
-        // Verifica se é cliente com teste expirado
+        
         const perfil = db.getPerfil(sender);
         const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
-
-        // Estado atual do usuário
+        
         const userState = userStates.get(sender) || { step: 'menu' };
 
         try {
-            // Se não reconhecer comando no menu, mostra menu apropriado
             if (!isGroup && text !== '[documento]') {
                 const comandosValidos = ['1', '2', '3', '4', '5', '6', '0', 'menu', 'admin', 'voltar', 'oi', 'ola', 'olá', 'hey', 'eai', 'eae'];
-                
                 if (!comandosValidos.includes(text) && userState.step === 'menu') {
                     if (testeExpirado && !isAdmin) {
-                        await sock.sendMessage(sender, {
-                            text: `Olá! 👋 Não entendi.\n\n${getMenuTesteExpirado(pushName)}`
-                        });
+                        await sock.sendMessage(sender, { text: `Olá! 👋\n\n${getMenuTesteExpirado(pushName)}` });
                     } else {
-                        await sock.sendMessage(sender, {
-                            text: `Olá! 👋 Não entendi.\n\n${getMenuPrincipal(pushName)}`
-                        });
+                        await sock.sendMessage(sender, { text: `Olá! 👋\n\n${getMenuPrincipal(pushName)}` });
                     }
                     return;
                 }
             }
 
-            // MENU PRINCIPAL OU MENU TESTE EXPIRADO
             if (userState.step === 'menu') {
-                
                 if (testeExpirado && !isAdmin) {
-                    
                     if (text === '1' || text.includes('comprar')) {
-                        await sock.sendMessage(sender, {
-                            text: `💳 *Comprar Key*\n\nPara comprar uma key, faça o pagamento via:\n\n• Pix\n• Transferência\n• Cartão\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
-                        });
-
-                    } else if (text === '2' || text.includes('admin') || text.includes('falar')) {
-                        await sock.sendMessage(sender, {
-                            text: `👑 *Chamando Admin...*\n\nAguarde, estou te conectando com o admin!`
-                        });
-                        
-                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: *Teste expirado, quer comprar key!*\n\n💬 Responda aqui para negociar.`
-                        });
-                        
-                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            contacts: {
-                                displayName: pushName,
-                                contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${pushName}\nTEL;waid=${numeroLimpo}:+${numeroLimpo}\nEND:VCARD` }]
-                            }
-                        });
-                        
-                        await sock.sendMessage(sender, {
-                            text: `✅ *Admin notificado!*\n\nO admin foi avisado e vai te chamar em breve.\n\nEnquanto isso, pode mandar mensagem direto:\n👤 +${ADMIN_NUMBER}`
-                        });
-
-                    } else if (text === '0' || text.includes('atendente')) {
-                        await sock.sendMessage(sender, {
-                            text: `💬 *Falar com Atendente*\n\nAguarde um momento...\n\nOu chame direto: +${ADMIN_NUMBER}`
-                        });
-                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `📩 *Novo Atendimento*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: *Teste expirado*\n\nEstá aguardando atendimento.`
-                        });
-
-                    } else if (['oi', 'ola', 'olá', 'hey', 'eai', 'eae', 'menu', 'voltar'].includes(text)) {
-                        await sock.sendMessage(sender, { 
-                            text: getMenuTesteExpirado(pushName)
-                        });
-
+                        await sock.sendMessage(sender, { text: `💳 *Comprar Key*\n\nValores:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame: +${ADMIN_NUMBER}` });
+                    } else if (text === '2' || text.includes('admin')) {
+                        await sock.sendMessage(sender, { text: `👑 *Chamando Admin...*` });
+                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `🚨 *CLIENTE QUER COMPRAR!*\n\nNome: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: Teste expirado` });
+                        await sock.sendMessage(sender, { text: `✅ *Admin notificado!*\n\nAguarde contato ou chame:\n👤 +${ADMIN_NUMBER}` });
+                    } else if (text === '0') {
+                        await sock.sendMessage(sender, { text: `💬 *Atendimento*\n\nAguarde ou chame: +${ADMIN_NUMBER}` });
+                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 *Atendimento*\n\n${pushName} - ${numeroLimpo}` });
                     } else {
-                        await sock.sendMessage(sender, { 
-                            text: getMenuTesteExpirado(pushName)
-                        });
+                        await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
                     }
-                    
                     return;
                 }
 
-                // MENU NORMAL
-                if (text === '1' || text.includes('comprar')) {
-                    await sock.sendMessage(sender, {
-                        text: `💳 *Comprar Key*\n\nPara comprar uma key, faça o pagamento via:\n\n• Pix\n• Transferência\n• Cartão\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
-                    });
-
-                } else if (text === '2' || text.includes('resgatar')) {
+                if (text === '1') {
+                    await sock.sendMessage(sender, { text: `💳 *Comprar Key*\n\nValores:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame: +${ADMIN_NUMBER}` });
+                } else if (text === '2') {
                     userStates.set(sender, { step: 'resgatar_key' });
-                    await sock.sendMessage(sender, {
-                        text: '🎁 *Resgatar Key*\n\nDigite sua key no formato:\nNYUX-XXXX-XXXX\n\n_Exemplo: NYUX-AB12-CD34_'
-                    });
-
-                } else if (text === '3' || text.includes('buscar')) {
-                    const temAcesso = db.verificarAcesso(sender);
-                    if (!temAcesso) {
-                        await sock.sendMessage(sender, {
-                            text: '❌ *Acesso Negado*\n\nVocê precisa de uma key ativa!\n\nDigite *2* para resgatar sua key ou *6* para teste grátis.'
-                        });
+                    await sock.sendMessage(sender, { text: '🎁 *Resgatar Key*\n\nDigite: NYUX-XXXX-XXXX' });
+                } else if (text === '3') {
+                    if (!db.verificarAcesso(sender)) {
+                        await sock.sendMessage(sender, { text: '❌ *Sem acesso!*\n\nDigite *2* para resgatar key ou *6* para teste.' });
                         return;
                     }
-                    
-                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
-                    let msg = '🎮 *Jogos Disponíveis*\n\n';
-                    
-                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria)) {
-                        msg += `${categoria}\n`;
-                        jogos.forEach((jogo, index) => {
-                            msg += `${index + 1}. ${jogo.jogo}\n`;
-                        });
+                    const jogos = db.getJogosDisponiveisPorCategoria();
+                    let msg = '🎮 *Jogos:*\n\n';
+                    for (const [cat, lista] of Object.entries(jogos)) {
+                        msg += `${cat}\n`;
+                        lista.forEach((j, i) => msg += `${i + 1}. ${j.jogo}\n`);
                         msg += '\n';
                     }
-                    
-                    msg += '🔍 *Digite o nome do jogo que deseja:*\n\n_Exemplo: GTA 5, Minecraft, FIFA..._';
-                    
+                    msg += '🔍 *Digite o nome do jogo:*';
                     userStates.set(sender, { step: 'buscar_jogo' });
                     await sock.sendMessage(sender, { text: msg });
-
-                } else if (text === '4' || text.includes('jogos') || text.includes('lista')) {
-                    const temAcesso = db.verificarAcesso(sender);
-                    if (!temAcesso) {
-                        await sock.sendMessage(sender, {
-                            text: '❌ *Acesso Negado*\n\nVocê precisa de uma key ativa!\n\nDigite *2* para resgatar sua key ou *6* para teste grátis.'
-                        });
+                } else if (text === '4') {
+                    if (!db.verificarAcesso(sender)) {
+                        await sock.sendMessage(sender, { text: '❌ *Sem acesso!*\n\nDigite *2* ou *6*' });
                         return;
                     }
-                    
-                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
-                    let msg = '📋 *Lista de Jogos Disponíveis*\n\n';
-                    
-                    let totalJogos = 0;
-                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria)) {
-                        msg += `${categoria} (${jogos.length} jogos)\n`;
-                        jogos.forEach((jogo, index) => {
-                            msg += `  ${index + 1}. ${jogo.jogo}\n`;
-                            totalJogos++;
-                        });
+                    const jogos = db.getJogosDisponiveisPorCategoria();
+                    let msg = '📋 *Jogos:*\n\n';
+                    let total = 0;
+                    for (const [cat, lista] of Object.entries(jogos)) {
+                        msg += `${cat} (${lista.length})\n`;
+                        lista.forEach((j) => { msg += `• ${j.jogo}\n`; total++; });
                         msg += '\n';
                     }
-                    
-                    msg += `🎮 *Total: ${totalJogos} jogos disponíveis*\n\n`;
-                    msg += '💡 Para resgatar uma conta, use a opção *3 - Buscar Jogo*';
-                    
-                    if (msg.length > 4000) {
-                        const partes = msg.match(/[\s\S]{1,4000}/g) || [msg];
-                        for (let i = 0; i < partes.length; i++) {
-                            await delay(1000);
-                            await sock.sendMessage(sender, { text: partes[i] + (i < partes.length - 1 ? '\n\n(continua...)' : '') });
-                        }
-                    } else {
-                        await sock.sendMessage(sender, { text: msg });
-                    }
-
-                } else if (text === '5' || text.includes('perfil')) {
-                    const perfilUser = db.getPerfil(sender);
-                    let msg = '👤 *Seu Perfil*\n\n';
-                    msg += `📱 Número: ${numeroLimpo}\n`;
-                    msg += `⏱️ Acesso: ${perfilUser.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
-                    
-                    if (perfilUser.keyInfo) {
-                        msg += `🔑 Key: ${perfilUser.keyInfo.key}\n`;
-                        msg += `📅 Expira: ${perfilUser.keyInfo.expira}\n`;
-                        msg += `⏰ Tipo: ${perfilUser.keyInfo.tipo || 'Normal'}\n`;
-                    }
-                    
-                    msg += `\n🎮 Jogos resgatados: ${perfilUser.totalResgatados}`;
-                    
-                    if (perfilUser.usouTeste && !perfilUser.temAcesso) {
-                        msg += `\n\n😢 *Seu teste expirou!*\nDigite *menu* para ver opções de compra.`;
-                    }
-                    
+                    msg += `🎮 Total: ${total}`;
                     await sock.sendMessage(sender, { text: msg });
-
-                } else if (text === '6' || text.includes('teste') || text.includes('gratis') || text.includes('grátis')) {
+                } else if (text === '5') {
+                    const p = db.getPerfil(sender);
+                    let msg = `👤 *Perfil*\n\n📱 ${numeroLimpo}\n⏱️ ${p.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
+                    if (p.keyInfo) msg += `🔑 ${p.keyInfo.key}\n📅 ${p.keyInfo.expira}\n⏰ ${p.keyInfo.tipo}\n`;
+                    msg += `\n🎮 Jogos: ${p.totalResgatados}`;
+                    if (p.usouTeste && !p.temAcesso) msg += `\n\n😢 *Teste expirou!*`;
+                    await sock.sendMessage(sender, { text: msg });
+                } else if (text === '6') {
                     userStates.set(sender, { step: 'resgatar_key_teste' });
-                    await sock.sendMessage(sender, {
-                        text: '🎉 *Key Teste Grátis*\n\nEscolha a duração do teste:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ *Atenção:* Você só pode gerar 1 key de teste!\n\nDigite o número:'
-                    });
-
-                } else if (text === '0' || text.includes('atendente')) {
-                    await sock.sendMessage(sender, {
-                        text: `💬 *Falar com Atendente*\n\nAguarde um momento...\n\nOu chame direto: +${ADMIN_NUMBER}`
-                    });
-                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                        text: `📩 *Novo Atendimento*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\n\nEstá aguardando atendimento.`
-                    });
-
+                    await sock.sendMessage(sender, { text: '🎉 *Teste Grátis*\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ Só 1 por pessoa!\n\nDigite:' });
+                } else if (text === '0') {
+                    await sock.sendMessage(sender, { text: `💬 *Atendimento*\n\nAguarde: +${ADMIN_NUMBER}` });
+                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 *Atendimento*\n\n${pushName} - ${numeroLimpo}` });
                 } else if (isAdmin && (text === 'admin' || text === 'adm')) {
                     userStates.set(sender, { step: 'admin_menu' });
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
-
-                } else if (['oi', 'ola', 'olá', 'hey', 'eai', 'eae'].includes(text)) {
-                    await sock.sendMessage(sender, { 
-                        text: getMenuPrincipal(pushName)
-                    });
-
                 } else {
-                    await sock.sendMessage(sender, { 
-                        text: getMenuPrincipal(pushName)
-                    });
+                    await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
-            }
-
-            // RESGATAR KEY NORMAL
-            else if (userState.step === 'resgatar_key') {
+            } else if (userState.step === 'resgatar_key') {
                 const key = text.toUpperCase().replace(/\s/g, '');
-                const resultado = db.resgatarKey(key, sender, pushName);
-                
-                if (resultado.sucesso) {
-                    userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, {
-                        text: `✅ *Key Resgatada com Sucesso!*\n\n🎆 Plano: ${resultado.plano}\n⏱️ Duração: ${resultado.duracao}\n📅 Expira em: ${resultado.expira}\n\nAgora você pode:\n• Buscar jogos (opção 3)\n• Ver lista de jogos (opção 4)\n\n🎮 Aproveite!`
-                    });
+                const r = db.resgatarKey(key, sender, pushName);
+                userStates.set(sender, { step: 'menu' });
+                if (r.sucesso) {
+                    await sock.sendMessage(sender, { text: `✅ *Key Ativada!*\n\n🎆 ${r.plano}\n📅 ${r.expira}\n\n🎮 Aproveite!` });
                 } else {
-                    await sock.sendMessage(sender, {
-                        text: `❌ *Key Inválida*\n\n${resultado.erro}\n\nTente novamente ou digite *menu* para voltar.`
-                    });
+                    await sock.sendMessage(sender, { text: `❌ ${r.erro}` });
                 }
-            }
-
-            // RESGATAR KEY TESTE GRÁTIS
-            else if (userState.step === 'resgatar_key_teste') {
+            } else if (userState.step === 'resgatar_key_teste') {
                 let duracao, horas;
-                
                 if (text === '1') { duracao = '1 hora'; horas = 1; }
                 else if (text === '2') { duracao = '2 horas'; horas = 2; }
                 else if (text === '3') { duracao = '6 horas'; horas = 6; }
                 else {
-                    await sock.sendMessage(sender, { text: '❌ Opção inválida. Digite 1, 2 ou 3:' });
+                    await sock.sendMessage(sender, { text: '❌ Digite 1, 2 ou 3:' });
                     return;
                 }
-                
-                const jaUsouTeste = db.verificarTesteUsado(sender);
-                if (jaUsouTeste) {
+                if (db.verificarTesteUsado(sender)) {
                     userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, {
-                        text: '❌ *Você já usou seu teste grátis!*\n\nCompre uma key para ter acesso ilimitado:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +' + ADMIN_NUMBER
-                    });
+                    await sock.sendMessage(sender, { text: '❌ *Já usou teste!*\n\nCompre: +'+ADMIN_NUMBER });
                     return;
                 }
-                
-                const prefixo = 'TESTE';
-                const sufixo = Math.random().toString(36).substring(2, 8).toUpperCase();
-                const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
-                const key = `${prefixo}-${meio}-${sufixo}`;
-                
-                const resultado = db.criarKeyTeste(key, duracao, horas, sender, pushName);
-                
-                if (resultado.sucesso) {
-                    userStates.set(sender, { step: 'menu' });
-                    await sock.sendMessage(sender, {
-                        text: `🎉 *Key Teste Gerada!*\n\n🔑 Key: ${key}\n⏱️ Duração: ${duracao}\n📅 Expira em: ${resultado.expira}\n\n✅ Agora você tem acesso completo ao catálogo!\n\n🎮 Aproveite seu teste!`
-                    });
-                } else {
-                    await sock.sendMessage(sender, {
-                        text: `❌ *Erro ao gerar teste*\n\n${resultado.erro}\n\nDigite *menu* para voltar.`
-                    });
+                const key = `TESTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+                const r = db.criarKeyTeste(key, duracao, horas, sender, pushName);
+                userStates.set(sender, { step: 'menu' });
+                if (r.sucesso) {
+                    await sock.sendMessage(sender, { text: `🎉 *Teste Ativado!*\n\n🔑 ${key}\n⏱️ ${duracao}\n📅 ${r.expira}` });
                 }
-            }
-
-            // BUSCAR JOGO
-            else if (userState.step === 'buscar_jogo') {
+            } else if (userState.step === 'buscar_jogo') {
                 const conta = db.buscarConta(text);
-                
+                userStates.set(sender, { step: 'menu' });
                 if (conta) {
-                    userStates.set(sender, { step: 'menu' });
-                    
-                    await sock.sendMessage(sender, {
-                        text: `🎮 *Conta Encontrada!*\n\n*Jogo:* ${conta.jogo}\n*Categoria:* ${conta.categoria}\n\n👤 *Login:* ${conta.login}\n🔒 *Senha:* ${conta.senha}\n\n⚠️ *IMPORTANTE:*\n1. Faça login na Steam\n2. Baixe o jogo\n3. Ative o *MODO OFFLINE*\n4. Jogue!\n\n🔒 Não altere a senha!\n\n✅ Esta conta é compartilhada - você pode usar quantas vezes quiser!\n\nDigite *menu* para voltar.`
-                    });
+                    await sock.sendMessage(sender, { text: `🎮 *${conta.jogo}*\n\n👤 ${conta.login}\n🔒 ${conta.senha}\n\n⚠️ Modo Offline!\n🔒 Não altere a senha!` });
                 } else {
-                    await sock.sendMessage(sender, {
-                        text: `❌ *Jogo não encontrado ou indisponível*\n\nNão temos "${text}" disponível no momento.\n\nDigite *4* para ver a lista de jogos ou tente outro nome.`
-                    });
+                    await sock.sendMessage(sender, { text: '❌ Jogo não encontrado.' });
                 }
-            }
-
-            // MENU ADMIN
-            else if (userState.step === 'admin_menu' && isAdmin) {
+            } else if (userState.step === 'admin_menu' && isAdmin) {
                 if (text === '1') {
-                    userStates.set(sender, { step: 'admin_add_conta_nome' });
-                    await sock.sendMessage(sender, {
-                        text: '➕ *Adicionar Conta - Passo 1/4*\n\nDigite o *NOME DO JOGO*:\n\n_Exemplo: GTA 5, FIFA 24, Call of Duty..._'
-                    });
-
+                    userStates.set(sender, { step: 'admin_add_conta_nome', tempConta: {} });
+                    await sock.sendMessage(sender, { text: '➕ Nome do jogo:' });
                 } else if (text === '2') {
                     userStates.set(sender, { step: 'admin_gerar_key' });
-                    await sock.sendMessage(sender, {
-                        text: '🔑 *Gerar Key*\n\nEscolha a duração:\n\n1️⃣ 7 dias\n2️⃣ 1 mês  \n3️⃣ Lifetime\n\nDigite o número:'
-                    });
-
+                    await sock.sendMessage(sender, { text: '🔑 Duração:\n1️⃣ 7 dias\n2️⃣ 1 mês\n3️⃣ Lifetime' });
                 } else if (text === '3') {
                     userStates.set(sender, { step: 'admin_gerar_key_teste' });
-                    await sock.sendMessage(sender, {
-                        text: '🎁 *Gerar Key Teste (Admin)*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\nDigite o número:'
-                    });
-
+                    await sock.sendMessage(sender, { text: '🎁 Teste:\n1️⃣ 1h\n2️⃣ 2h\n3️⃣ 6h' });
                 } else if (text === '4') {
                     userStates.set(sender, { step: 'admin_importar' });
-                    await sock.sendMessage(sender, {
-                        text: '📄 *Importar Contas*\n\nEnvie o arquivo .txt com as contas.\n\nO sistema detectará automaticamente:\n• Nome do jogo\n• Login e senha\n• Categoria\n\nAguardando arquivo...'
-                    });
-
+                    await sock.sendMessage(sender, { text: '📄 Envie arquivo .txt' });
                 } else if (text === '5') {
-                    const stats = db.getEstatisticas();
-                    await sock.sendMessage(sender, {
-                        text: `📊 *Estatísticas*\n\n🎮 Total de Jogos: ${stats.totalJogos}\n✅ Disponíveis: ${stats.disponiveis}\n❌ Usados: ${stats.usados}\n🔑 Keys Ativas: ${stats.keysAtivas}\n🎉 Keys Teste: ${stats.keysTeste}\n👥 Clientes: ${stats.totalClientes}\n📂 Categorias: ${stats.totalCategorias}`
-                    });
-
+                    const s = db.getEstatisticas();
+                    await sock.sendMessage(sender, { text: `📊 Stats\n\n🎮 ${s.totalJogos} jogos\n✅ ${s.disponiveis} disp\n🔑 ${s.keysAtivas} keys\n👥 ${s.totalClientes} clientes` });
                 } else if (text === '6') {
                     const jogos = db.getTodosJogosDisponiveis();
-                    let msg = '📋 *Todos os Jogos Disponíveis*\n\n';
-                    
-                    let parteAtual = '';
-                    const partes = [];
-                    
-                    for (const jogo of jogos) {
-                        const linha = `• ${jogo.jogo} (${jogo.categoria})\n`;
-                        if ((parteAtual + linha).length > 4000) {
-                            partes.push(parteAtual);
-                            parteAtual = linha;
-                        } else {
-                            parteAtual += linha;
-                        }
-                    }
-                    partes.push(parteAtual);
-                    
-                    await sock.sendMessage(sender, { text: msg + partes[0] });
-                    
-                    for (let i = 1; i < partes.length; i++) {
-                        await delay(1000);
-                        await sock.sendMessage(sender, { text: partes[i] });
-                    }
-
+                    let msg = '📋 Jogos:\n\n';
+                    jogos.forEach(j => msg += `• ${j.jogo}\n`);
+                    await sock.sendMessage(sender, { text: msg });
                 } else if (text === '7') {
                     userStates.set(sender, { step: 'admin_broadcast' });
-                    await sock.sendMessage(sender, {
-                        text: '📢 *Broadcast*\n\nDigite a mensagem que será enviada para todos os clientes:\n\n_Exemplo: Novo jogo adicionado! Call of Duty Modern Warfare 3 já disponível!_'
-                    });
-
-                } else if (text === '0' || text === 'menu') {
+                    await sock.sendMessage(sender, { text: '📢 Mensagem para todos:' });
+                } else if (text === '0') {
                     userStates.set(sender, { step: 'menu' });
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
-
                 } else {
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
                 }
-            }
-
-            // ADMIN: ADICIONAR CONTA - PASSOS
-            else if (userState.step === 'admin_add_conta_nome' && isAdmin) {
-                userStates.set(sender, { 
-                    step: 'admin_add_conta_categoria',
-                    tempConta: { jogo: text }
-                });
-                
-                const categorias = [
-                    '🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil',
-                    '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games',
-                    '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red',
-                    '🚜 Simuladores', '👻 Terror', '🎲 RPG',
-                    '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia',
-                    '🌲 Survival', '🍄 Nintendo', '💙 Sega',
-                    '💣 Guerra', '🎮 Ação/Aventura'
-                ];
-                
-                let msg = '➕ *Adicionar Conta - Passo 2/4*\n\nEscolha a *CATEGORIA*:\n\n';
-                categorias.forEach((cat, index) => {
-                    msg += `${index + 1}. ${cat}\n`;
-                });
-                msg += '\nDigite o número:';
-                
-                await sock.sendMessage(sender, { text: msg });
-            }
-
-            else if (userState.step === 'admin_add_conta_categoria' && isAdmin) {
-                const categorias = [
-                    '🗡️ Assassin\'s Creed', '🔫 Call of Duty', '🧟 Resident Evil',
-                    '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar Games',
-                    '🦸 Super-Heróis', '⚔️ Soulslike', '🐺 CD Projekt Red',
-                    '🚜 Simuladores', '👻 Terror', '🎲 RPG',
-                    '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia',
-                    '🌲 Survival', '🍄 Nintendo', '💙 Sega',
-                    '💣 Guerra', '🎮 Ação/Aventura'
-                ];
-                
-                const escolha = parseInt(text) - 1;
-                
-                if (escolha >= 0 && escolha < categorias.length) {
-                    const temp = userState.tempConta || {};
-                    temp.categoria = categorias[escolha];
-                    
-                    userStates.set(sender, { 
-                        step: 'admin_add_conta_login',
-                        tempConta: temp
-                    });
-                    
-                    await sock.sendMessage(sender, {
-                        text: '➕ *Adicionar Conta - Passo 3/4*\n\nDigite o *LOGIN*:'
-                    });
+            } else if (userState.step === 'admin_add_conta_nome' && isAdmin) {
+                userState.tempConta.jogo = text;
+                userStates.set(sender, { step: 'admin_add_conta_categoria', tempConta: userState.tempConta });
+                const cats = ['1. 🗡️ AC', '2. 🔫 COD', '3. 🧟 RE', '4. ⚽ Esportes', '5. 🏎️ Corrida', '6. 🚗 Rockstar', '7. 🦸 Herois', '8. ⚔️ Souls', '9. 🐺 CDPR', '10. 🚜 Sim', '11. 👻 Terror', '12. 🎲 RPG', '13. 🥊 Luta', '14. 🕵️ Stealth', '15. 🧠 Estratégia', '16. 🌲 Survival', '17. 🍄 Nintendo', '18. 💙 Sega', '19. 💣 Guerra', '20. 🎮 Ação'];
+                await sock.sendMessage(sender, { text: '➕ Categoria (1-20):\n\n' + cats.join('\n') });
+            } else if (userState.step === 'admin_add_conta_categoria' && isAdmin) {
+                const cats = ['🗡️ AC', '🔫 COD', '🧟 RE', '⚽ Esportes', '🏎️ Corrida', '🚗 Rockstar', '🦸 Herois', '⚔️ Souls', '🐺 CDPR', '🚜 Sim', '👻 Terror', '🎲 RPG', '🥊 Luta', '🕵️ Stealth', '🧠 Estratégia', '🌲 Survival', '🍄 Nintendo', '💙 Sega', '💣 Guerra', '🎮 Ação'];
+                const esc = parseInt(text) - 1;
+                if (esc >= 0 && esc < 20) {
+                    userState.tempConta.categoria = cats[esc];
+                    userStates.set(sender, { step: 'admin_add_conta_login', tempConta: userState.tempConta });
+                    await sock.sendMessage(sender, { text: '➕ Login:' });
                 } else {
-                    await sock.sendMessage(sender, {
-                        text: '❌ Opção inválida. Digite 1-20:'
-                    });
+                    await sock.sendMessage(sender, { text: '❌ 1-20:' });
                 }
-            }
-
-            else if (userState.step === 'admin_add_conta_login' && isAdmin) {
-                const temp = userState.tempConta || {};
-                temp.login = text;
-                
-                userStates.set(sender, { 
-                    step: 'admin_add_conta_senha',
-                    tempConta: temp
-                });
-                
-                await sock.sendMessage(sender, {
-                    text: '➕ *Adicionar Conta - Passo 4/4*\n\nDigite a *SENHA*:'
-                });
-            }
-
-            else if (userState.step === 'admin_add_conta_senha' && isAdmin) {
-                const temp = userState.tempConta || {};
-                temp.senha = text;
-                
-                db.addConta(temp.jogo, temp.categoria, temp.login, temp.senha);
-                
+            } else if (userState.step === 'admin_add_conta_login' && isAdmin) {
+                userState.tempConta.login = text;
+                userStates.set(sender, { step: 'admin_add_conta_senha', tempConta: userState.tempConta });
+                await sock.sendMessage(sender, { text: '➕ Senha:' });
+            } else if (userState.step === 'admin_add_conta_senha' && isAdmin) {
+                userState.tempConta.senha = text;
+                db.addConta(userState.tempConta.jogo, userState.tempConta.categoria, userState.tempConta.login, userState.tempConta.senha);
                 userStates.set(sender, { step: 'admin_menu' });
-                
-                await sock.sendMessage(sender, {
-                    text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}\n\nDigite *menu* para voltar.`
-                });
-            }
-
-            // ADMIN: GERAR KEY NORMAL
-            else if (userState.step === 'admin_gerar_key' && isAdmin) {
-                let duracao, dias;
-                
-                if (text === '1') { duracao = '7 dias'; dias = 7; }
-                else if (text === '2') { duracao = '1 mês'; dias = 30; }
-                else if (text === '3') { duracao = 'Lifetime'; dias = 99999; }
-                else {
-                    await sock.sendMessage(sender, { text: '❌ Digite 1, 2 ou 3:' });
-                    return;
-                }
-                
+                await sock.sendMessage(sender, { text: `✅ Adicionado!\n\n🎮 ${userState.tempConta.jogo}` });
+            } else if (userState.step === 'admin_gerar_key' && isAdmin) {
+                let dur, dias;
+                if (text === '1') { dur = '7 dias'; dias = 7; }
+                else if (text === '2') { dur = '1 mês'; dias = 30; }
+                else if (text === '3') { dur = 'Lifetime'; dias = 99999; }
+                else { await sock.sendMessage(sender, { text: '❌ 1-3:' }); return; }
                 const key = `NYUX-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-                
-                db.criarKey(key, duracao, dias);
+                db.criarKey(key, dur, dias);
                 userStates.set(sender, { step: 'admin_menu' });
-                
-                await sock.sendMessage(sender, {
-                    text: `🔑 *Key Gerada!*\n\n*Key:* ${key}\n*Duração:* ${duracao}\n\nCopie e envie ao cliente.`
-                });
-            }
-
-            // ADMIN: GERAR KEY TESTE
-            else if (userState.step === 'admin_gerar_key_teste' && isAdmin) {
-                let duracao, horas;
-                
-                if (text === '1') { duracao = '1 hora'; horas = 1; }
-                else if (text === '2') { duracao = '2 horas'; horas = 2; }
-                else if (text === '3') { duracao = '6 horas'; horas = 6; }
-                else {
-                    await sock.sendMessage(sender, { text: '❌ Digite 1, 2 ou 3:' });
-                    return;
-                }
-                
+                await sock.sendMessage(sender, { text: `🔑 ${key}\n⏱️ ${dur}` });
+            } else if (userState.step === 'admin_gerar_key_teste' && isAdmin) {
+                let dur, h;
+                if (text === '1') { dur = '1h'; h = 1; }
+                else if (text === '2') { dur = '2h'; h = 2; }
+                else if (text === '3') { dur = '6h'; h = 6; }
+                else { await sock.sendMessage(sender, { text: '❌ 1-3:' }); return; }
                 const key = `TESTE-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-                
-                db.criarKey(key, duracao, horas, true);
+                db.criarKey(key, dur, h, true);
                 userStates.set(sender, { step: 'admin_menu' });
-                
-                await sock.sendMessage(sender, {
-                    text: `🎁 *Key Teste!*\n\n*Key:* ${key}\n*Duração:* ${duracao}`
-                });
-            }
-
-            // ADMIN: IMPORTAR TXT
-            else if (userState.step === 'admin_importar' && isAdmin) {
+                await sock.sendMessage(sender, { text: `🎁 ${key}\n⏱️ ${dur}` });
+            } else if (userState.step === 'admin_importar' && isAdmin) {
                 if (msg.message.documentMessage) {
-                    await sock.sendMessage(sender, { text: '⏳ Processando...' });
-                    
+                    await sock.sendMessage(sender, { text: '⏳...' });
                     try {
                         const stream = await sock.downloadContentFromMessage(msg.message.documentMessage, 'document');
-                        let buffer = Buffer.from([]);
-                        
-                        for await (const chunk of stream) {
-                            buffer = Buffer.concat([buffer, chunk]);
-                        }
-                        
-                        const resultado = db.importarTXT(buffer.toString('utf-8'));
-                        
+                        let buf = Buffer.from([]);
+                        for await (const c of stream) buf = Buffer.concat([buf, c]);
+                        const r = db.importarTXT(buf.toString('utf-8'));
                         userStates.set(sender, { step: 'admin_menu' });
-                        
-                        await sock.sendMessage(sender, {
-                            text: `✅ *Importado!*\n\n📊 ${resultado.adicionadas} contas\n🎮 ${resultado.jogosUnicos} jogos\n📂 ${resultado.categorias} categorias`
-                        });
-                        
-                    } catch (err) {
-                        await sock.sendMessage(sender, { text: '❌ Erro no arquivo.' });
+                        await sock.sendMessage(sender, { text: `✅ ${r.adicionadas} contas\n🎮 ${r.jogosUnicos} jogos` });
+                    } catch (e) {
+                        await sock.sendMessage(sender, { text: '❌ Erro' });
                     }
                 } else {
-                    await sock.sendMessage(sender, { text: '📄 Envie o arquivo .txt' });
+                    await sock.sendMessage(sender, { text: '📄 Envie .txt' });
                 }
-            }
-
-            // ADMIN: BROADCAST
-            else if (userState.step === 'admin_broadcast' && isAdmin) {
-                const clientes = db.getTodosClientes();
-                let enviados = 0;
-                
-                for (const cliente of clientes) {
+            } else if (userState.step === 'admin_broadcast' && isAdmin) {
+                const cli = db.getTodosClientes();
+                let env = 0;
+                for (const c of cli) {
                     try {
-                        await sock.sendMessage(cliente.numero, {
-                            text: `📢 *NyuxStore*\n\n${text}`
-                        });
-                        enviados++;
+                        await sock.sendMessage(c.numero, { text: `📢 ${text}` });
+                        env++;
                         await delay(500);
-                    } catch (e) {
-                        console.log('Erro:', cliente.numero);
-                    }
+                    } catch (e) {}
                 }
-                
                 userStates.set(sender, { step: 'admin_menu' });
-                await sock.sendMessage(sender, {
-                    text: `✅ Enviado para ${enviados}/${clientes.length} clientes`
-                });
+                await sock.sendMessage(sender, { text: `✅ ${env}/${cli.length}` });
             }
 
-            // COMANDO MENU
             if (text === 'menu' || text === 'voltar') {
                 userStates.set(sender, { step: 'menu' });
-                
-                const perfilAtual = db.getPerfil(sender);
-                if (perfilAtual.usouTeste && !perfilAtual.temAcesso && !isAdmin) {
+                const p = db.getPerfil(sender);
+                if (p.usouTeste && !p.temAcesso && !isAdmin) {
                     await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
                 } else {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
             }
-
         } catch (error) {
             console.error('Erro:', error);
-            await sock.sendMessage(sender, {
-                text: '❌ Erro. Digite *menu* para recomeçar.'
-            });
+            await sock.sendMessage(sender, { text: '❌ Erro. Digite *menu*' });
         }
     });
 
     return sock;
 }
 
+// Inicia servidor HTTP
+server.listen(3000, () => {
+    console.log('🌐 Servidor web: http://localhost:3000/qr');
+});
+
 console.log('🚀 Iniciando NyuxStore...');
-console.log('📱 Aguarde o QR Code no WhatsApp:', ADMIN_NUMBER);
 connectToWhatsApp();
