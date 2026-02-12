@@ -26,7 +26,7 @@ const TEMPO_LIMPEZA_MS = 5 * 60 * 1000;
 let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
-let qrCodeRaw = null; // Guarda o QR raw para debug
+let tentativasConexao = 0;
 
 setInterval(() => {
     mensagensProcessadas.clear();
@@ -36,10 +36,26 @@ setInterval(() => {
 // ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-
+    
     const url = req.url;
-    console.log(`🌐 Acesso: ${url} | botConectado: ${botConectado} | temQR: ${!!qrCodeDataURL}`);
+
+    if (url === '/api/status') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+            conectado: botConectado,
+            temQR: !!qrCodeDataURL,
+            timestamp: new Date().toISOString()
+        }));
+        return;
+    }
+
+    if (url === '/health') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
+        return;
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
     if (url === '/') {
         res.end(`
@@ -48,7 +64,7 @@ const server = http.createServer((req, res) => {
             <head>
                 <title>${STORE_NAME} - Bot WhatsApp</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
-                <meta http-equiv="refresh" content="3">
+                <meta http-equiv="refresh" content="5">
                 <style>
                     body { 
                         font-family: Arial, sans-serif; 
@@ -83,6 +99,10 @@ const server = http.createServer((req, res) => {
                         margin: 20px;
                         box-shadow: 0 4px 15px rgba(0,217,255,0.4);
                     }
+                    @keyframes pulse {
+                        0%, 100% { opacity: 1; }
+                        50% { opacity: 0.7; }
+                    }
                     .info {
                         background: rgba(255,255,255,0.1);
                         padding: 20px;
@@ -90,39 +110,32 @@ const server = http.createServer((req, res) => {
                         margin: 20px auto;
                         max-width: 600px;
                     }
-                    @keyframes pulse {
-                        0%, 100% { opacity: 1; }
-                        50% { opacity: 0.7; }
-                    }
                 </style>
             </head>
             <body>
                 <h1>🎮 ${STORE_NAME} Bot</h1>
                 <div class="status ${botConectado ? 'online' : (qrCodeDataURL ? 'waiting' : 'offline')}">
-                    ${botConectado ? '✅ Bot Conectado e Online!' : (qrCodeDataURL ? '📱 QR Code Pronto!' : '⏳ Aguardando QR Code...')}
+                    ${botConectado ? '✅ Bot Conectado!' : (qrCodeDataURL ? '📱 QR Code Pronto!' : '⏳ Aguardando QR Code...')}
                 </div>
-                ${!botConectado && qrCodeDataURL ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : ''}
-                ${botConectado ? '<div class="btn" style="background: #4CAF50;">🚀 Bot Online!</div>' : ''}
+                ${!botConectado && qrCodeDataURL ? `<a href="/qr" class="btn">📱 Escanear QR Code</a>` : ''}
+                ${botConectado ? '<div class="btn" style="background: #4CAF50;">🚀 Online!</div>' : ''}
                 <div class="info">
                     <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
                     <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
-                    <p style="margin-top: 15px; font-size: 0.9rem; color: #aaa;">
-                        Status: ${botConectado ? 'Conectado' : (qrCodeDataURL ? 'QR Gerado' : 'Gerando...')}
-                    </p>
+                    <p style="margin-top: 15px; color: #aaa;">Atualizando automaticamente...</p>
                 </div>
             </body>
             </html>
         `);
     }
     else if (url === '/qr') {
-        console.log(`📱 Página QR solicitada. qrCodeDataURL existe: ${!!qrCodeDataURL}, tamanho: ${qrCodeDataURL ? qrCodeDataURL.length : 0}`);
-        
         if (botConectado) {
             res.end(`
                 <!DOCTYPE html>
                 <html>
                 <head>
                     <title>Conectado - ${STORE_NAME}</title>
+                    <meta http-equiv="refresh" content="3">
                     <style>
                         body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
                         .success { background: #4CAF50; padding: 40px; border-radius: 20px; margin: 50px auto; max-width: 500px; }
@@ -132,11 +145,12 @@ const server = http.createServer((req, res) => {
                     <div class="success">
                         <h1>✅ Bot Já Conectado!</h1>
                         <p>O bot está online.</p>
+                        <a href="/" style="color: white;">← Voltar</a>
                     </div>
                 </body>
                 </html>
             `);
-        } else if (qrCodeDataURL && qrCodeDataURL.length > 100) {
+        } else if (qrCodeDataURL) {
             res.end(`
                 <!DOCTYPE html>
                 <html>
@@ -152,25 +166,16 @@ const server = http.createServer((req, res) => {
                             color: white;
                             min-height: 100vh;
                             margin: 0;
-                            display: flex;
-                            flex-direction: column;
-                            align-items: center;
-                            justify-content: center;
                         }
                         .qr-container {
                             background: white;
                             padding: 30px;
                             border-radius: 25px;
                             box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-                            margin: 20px;
-                            max-width: 90vw;
+                            margin: 20px auto;
+                            max-width: 450px;
                         }
-                        .qr-container img { 
-                            width: 400px; 
-                            max-width: 80vw; 
-                            height: auto;
-                            display: block;
-                        }
+                        .qr-container img { width: 100%; max-width: 400px; }
                         .info {
                             background: rgba(255,255,255,0.1);
                             padding: 25px;
@@ -193,10 +198,7 @@ const server = http.createServer((req, res) => {
                     <h1>🎮 ${STORE_NAME}</h1>
                     <h2>📱 Escaneie o QR Code</h2>
                     <div class="qr-container">
-                        <img src="${qrCodeDataURL}" alt="QR Code WhatsApp" onerror="this.style.display='none'; document.getElementById('erro').style.display='block';">
-                        <div id="erro" style="display:none; color:red; padding:20px;">
-                            Erro ao carregar QR Code. Atualize a página.
-                        </div>
+                        <img src="${qrCodeDataURL}" alt="QR Code WhatsApp">
                     </div>
                     <div class="info">
                         <p class="atualizando">🔄 Atualizando automaticamente...</p>
@@ -204,6 +206,7 @@ const server = http.createServer((req, res) => {
                         <p>2. Configurações → WhatsApp Web</p>
                         <p>3. Aponte a câmera para o QR Code</p>
                     </div>
+                    <a href="/" style="color: #00d9ff;">← Voltar ao início</a>
                 </body>
                 </html>
             `);
@@ -213,48 +216,21 @@ const server = http.createServer((req, res) => {
                 <html>
                 <head>
                     <title>Gerando - ${STORE_NAME}</title>
-                    <meta http-equiv="refresh" content="2">
+                    <meta http-equiv="refresh" content="3">
                     <style>
                         body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
                         .loading { font-size: 28px; animation: pulse 1s infinite; }
                         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-                        .spinner {
-                            border: 4px solid rgba(255,255,255,0.1);
-                            border-left-color: #00d9ff;
-                            border-radius: 50%;
-                            width: 50px;
-                            height: 50px;
-                            animation: spin 1s linear infinite;
-                            margin: 20px auto;
-                        }
-                        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                     </style>
                 </head>
                 <body>
                     <h1>⏳ Gerando QR Code...</h1>
-                    <div class="spinner"></div>
                     <p class="loading">Aguarde o bot conectar...</p>
-                    <p style="color: #888; font-size: 0.9rem;">Isso pode levar alguns segundos</p>
-                    <p style="color: #666; font-size: 0.8rem; margin-top: 20px;">
-                        Debug: bot=${botConectado}, qr=${qrCodeDataURL ? 'existe' : 'null'}, tamanho=${qrCodeDataURL ? qrCodeDataURL.length : 0}
-                    </p>
+                    <p style="color: #aaa;">Tentativa: ${tentativasConexao}</p>
                 </body>
                 </html>
             `);
         }
-    }
-    else if (url === '/api/status') {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({
-            conectado: botConectado,
-            temQR: !!qrCodeDataURL && qrCodeDataURL.length > 100,
-            qrTamanho: qrCodeDataURL ? qrCodeDataURL.length : 0,
-            timestamp: new Date().toISOString()
-        }));
-    }
-    else if (url === '/health') {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
     }
     else {
         res.writeHead(302, { 'Location': '/' });
@@ -267,49 +243,18 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 Acesse: http://localhost:${PORT}/qr`);
 });
 
-// ===== FUNÇÃO QR CODE COM DEBUG =====
 async function atualizarQRCode(qr) {
-    console.log('📱 FUNÇÃO atualizarQRCode CHAMADA!');
-    console.log('📱 QR recebido (primeiros 50 chars):', qr ? qr.substring(0, 50) : 'NULL');
-    
     try {
         const QRCode = require('qrcode');
-        
-        // Guarda o QR raw
-        qrCodeRaw = qr;
-        
-        console.log('📱 Gerando Data URL...');
-        
-        // Gera Data URL
-        const dataUrl = await QRCode.toDataURL(qr, {
-            type: 'image/png',
+        qrCodeDataURL = await QRCode.toDataURL(qr, {
             width: 500,
             margin: 2,
-            color: {
-                dark: '#000000',
-                light: '#FFFFFF'
-            }
+            color: { dark: '#000000', light: '#FFFFFF' }
         });
-        
-        console.log('📱 Data URL gerada! Tamanho:', dataUrl.length);
-        console.log('📱 Primeiros 100 chars:', dataUrl.substring(0, 100));
-        
-        // Só atualiza se gerou corretamente
-        if (dataUrl && dataUrl.startsWith('data:image/png;base64,')) {
-            qrCodeDataURL = dataUrl;
-            console.log('✅ QR Code salvo com sucesso!');
-            console.log('✅ qrCodeDataURL agora tem:', qrCodeDataURL.length, 'caracteres');
-        } else {
-            console.error('❌ Data URL inválida:', dataUrl ? dataUrl.substring(0, 50) : 'null');
-        }
-        
-        // Mostra no terminal também
-        console.log('📱 QR Code no terminal:');
+        console.log('✅ QR Code gerado com sucesso! Tamanho:', qrCodeDataURL.length);
         qrcode.generate(qr, { small: true });
-        
     } catch (err) {
-        console.error('❌ ERRO ao gerar QR Code:', err.message);
-        console.error(err.stack);
+        console.error('❌ Erro ao gerar QR Code:', err);
     }
 }
 
@@ -380,60 +325,65 @@ function calcularTempoUso(dataRegistro) {
     return 'Agora mesmo';
 }
 
-// ===== CONEXÃO WHATSAPP =====
 async function connectToWhatsApp() {
-    console.log('🔌 Iniciando conexão com WhatsApp...');
+    tentativasConexao++;
+    console.log(`\n🔄 Tentativa de conexão #${tentativasConexao}...`);
     
     const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
-    console.log('🔌 Criando socket...');
+    console.log('📱 Criando socket do WhatsApp...');
     
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ['NyuxStore Bot', 'Chrome', '1.0.0'],
-        printQRInTerminal: false
+        browser: ['NyuxStore Bot', 'Chrome', '1.0'],
+        printQRInTerminal: false,
+        // Forçar nova conexão se não houver credenciais válidas
+        markOnlineOnConnect: true,
+        syncFullHistory: false,
+        shouldIgnoreJid: jid => jid?.includes('broadcast')
     });
 
     sockGlobal = sock;
 
-    console.log('🔌 Socket criado. Aguardando eventos...');
-
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        console.log('📡 Evento connection.update:', { connection, temQR: !!qr, temLastDisconnect: !!lastDisconnect });
+        console.log('📡 Evento connection.update:', { 
+            connection, 
+            temQR: !!qr, 
+            temLastDisconnect: !!lastDisconnect 
+        });
         
-        // QUANDO RECEBER QR CODE
         if (qr) {
-            console.log('🎯🎯🎯 QR CODE RECEBIDO! 🎯🎯🎯');
-            console.log('🎯 Tamanho do QR:', qr.length);
-            console.log('🎯 Chamando atualizarQRCode...');
+            console.log('✅ QR CODE RECEBIDO! Gerando imagem...');
             await atualizarQRCode(qr);
-            console.log('🎯 atualizarQRCode finalizado. qrCodeDataURL existe:', !!qrCodeDataURL);
         }
         
         if (connection === 'close') {
-            console.log('❌ Conexão fechada!');
             botConectado = false;
             qrCodeDataURL = null;
-            qrCodeRaw = null;
             
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('🔄 Reconectar?', shouldReconnect);
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log(`❌ Conexão fechada! Código: ${statusCode}`);
+            console.log(`🔄 Reconectar? ${shouldReconnect}`);
             
             if (shouldReconnect) {
                 console.log('⏳ Reconectando em 5 segundos...');
                 setTimeout(connectToWhatsApp, 5000);
+            } else {
+                console.log('🚫 Não vou reconectar (logout detectado)');
             }
         } else if (connection === 'open') {
-            console.log('✅✅✅ CONECTADO! ✅✅✅');
             botConectado = true;
             qrCodeDataURL = null;
-            qrCodeRaw = null;
-            console.log('📱 Bot número:', sock.user?.id);
+            tentativasConexao = 0;
+            console.log('✅✅✅ BOT CONECTADO COM SUCESSO! ✅✅✅');
+            console.log('📱 Número:', sock.user?.id?.split(':')[0]);
         } else if (connection === 'connecting') {
             console.log('⏳ Conectando...');
         }
@@ -441,7 +391,6 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Mensagens
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
@@ -540,7 +489,7 @@ async function connectToWhatsApp() {
                     let total = 0;
                     for (const [cat, lista] of Object.entries(jogos)) {
                         msg += `${cat} (${lista.length})\n`;
-                        lista.forEach((j, i) => msg += `    ${i + 1}. ${j.jogo}\n`);
+                        lista.forEach((j, i) => msg += `     ${i + 1}. ${j.jogo}\n`);
                         total += lista.length;
                     }
                     msg += `\n🎮 Total: ${total}`;
@@ -596,7 +545,7 @@ async function connectToWhatsApp() {
                             text: `👑 *MASTER KEY ATIVADA!*\n\n🎉 Parabéns ${pushName}!\nVocê agora é ADMINISTRADOR PERMANENTE!\n\n⚠️ Esta key foi bloqueada.\n\n🔧 Digite: *admin*` 
                         });
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `🚨 *MASTER KEY USADA!*\n\n👤 ${pushName}\n📱 ${sender.replace('@s.whatsapp.net', '').split(':')[0]}\n⏰ ${new Date().toLocaleString()}`
+                            text: `🚨 *MASTER KEY USADA!*\n\n👤 ${pushName}\n📱 ${sender.replace('@s.whatsapp.net', '').split(':')[0]}\n⏰ ${new Date().toLocaleString()}` 
                         });
                     } else {
                         await sock.sendMessage(sender, { text: `❌ *${resultado.erro}*` });
@@ -650,7 +599,7 @@ async function connectToWhatsApp() {
                 if (conta) {
                     userStates.set(sender, { step: 'menu' });
                     await sock.sendMessage(sender, {
-                        text: `🎮 *${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 ${conta.login}\n🔒 ${conta.senha}\n\n⚠️ Modo Offline!\n🔒 Não altere a senha!`
+                        text: `🎮 *${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 ${conta.login}\n🔒 ${conta.senha}\n\n⚠️ Modo Offline!\n🔒 Não altere a senha!` 
                     });
                 } else {
                     await sock.sendMessage(sender, { text: `❌ "${text}" não encontrado` });
@@ -783,7 +732,7 @@ async function connectToWhatsApp() {
                 db.addConta(temp.jogo, temp.categoria, temp.login, temp.senha);
                 userStates.set(sender, { step: 'admin_menu' });
                 await sock.sendMessage(sender, {
-                    text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}`
+                    text: `✅ *Conta adicionada!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}` 
                 });
             }
             // ADMIN: GERAR KEYS
@@ -800,7 +749,7 @@ async function connectToWhatsApp() {
                 db.criarKey(key, duracao, dias);
                 userStates.set(sender, { step: 'admin_menu' });
                 await sock.sendMessage(sender, {
-                    text: `🔑 *Key Gerada!*\n\n${key}\n⏱️ ${duracao}\n\nCopie e envie!`
+                    text: `🔑 *Key Gerada!*\n\n${key}\n⏱️ ${duracao}\n\nCopie e envie!` 
                 });
             }
             else if (userState.step === 'admin_gerar_teste' && isAdmin) {
@@ -816,7 +765,7 @@ async function connectToWhatsApp() {
                 db.criarKey(key, duracao, horas, true);
                 userStates.set(sender, { step: 'admin_menu' });
                 await sock.sendMessage(sender, {
-                    text: `🎁 *Key Teste!*\n\n${key}\n⏱️ ${duracao}\n\nEnvie para o cliente!`
+                    text: `🎁 *Key Teste!*\n\n${key}\n⏱️ ${duracao}\n\nEnvie para o cliente!` 
                 });
             }
             // ADMIN: IMPORTAR TXT
@@ -837,7 +786,7 @@ async function connectToWhatsApp() {
                         
                         if (resultado.sucesso && resultado.adicionadas > 0) {
                             await sock.sendMessage(sender, {
-                                text: `✅ *Importação Concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categoriasDetectadas} categorias\n\n⚠️ ${resultado.ignoradas} entradas ignoradas\n❌ ${resultado.erros} erros\n\nAs contas foram adicionadas 1 por 1 em ordem!`
+                                text: `✅ *Importação Concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categoriasDetectadas} categorias\n\n⚠️ ${resultado.ignoradas} entradas ignoradas\n❌ ${resultado.erros} erros\n\nAs contas foram adicionadas 1 por 1 em ordem!` 
                             });
                         } else {
                             await sock.sendMessage(sender, { 
@@ -860,7 +809,7 @@ async function connectToWhatsApp() {
                 for (const cliente of clientes) {
                     try {
                         await sock.sendMessage(cliente.numero, {
-                            text: `📢 *NyuxStore*\n\n${text}`
+                            text: `📢 *NyuxStore*\n\n${text}` 
                         });
                         enviados++;
                         await delay(1000);
