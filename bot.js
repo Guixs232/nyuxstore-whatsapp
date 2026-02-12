@@ -1,5 +1,6 @@
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
+const fs = require('fs');
 const Database = require('./database');
 const moment = require('moment');
 
@@ -81,6 +82,25 @@ _Digite o número da opção_
 `;
 }
 
+// Salvar QR Code como arquivo
+async function salvarQRCode(qr) {
+    try {
+        const QRCode = require('qrcode');
+        await QRCode.toFile('/app/qr-code.png', qr, {
+            color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+            },
+            width: 500,
+            margin: 2
+        });
+        console.log('📱 QR Code salvo em: /app/qr-code.png');
+        console.log('🔗 Baixe o arquivo qr-code.png do servidor e escaneie!');
+    } catch (err) {
+        console.error('Erro ao salvar QR Code:', err);
+    }
+}
+
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
     // Importa Baileys dinamicamente (ES Module)
@@ -94,7 +114,7 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
+        printQRInTerminal: false, // Desabilita QR no terminal
         auth: state,
         browser: ['NyuxStore Bot', 'Chrome', '1.0'],
         syncFullHistory: false,
@@ -103,11 +123,14 @@ async function connectToWhatsApp() {
         shouldIgnoreJid: jid => false
     });
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log('📱 Escaneie o QR Code com seu WhatsApp');
+            console.log('📱 Novo QR Code gerado!');
+            // Salva como imagem
+            await salvarQRCode(qr);
+            // Também mostra no terminal como backup
             qrcode.generate(qr, { small: true });
         }
         
@@ -119,6 +142,11 @@ async function connectToWhatsApp() {
             console.log('✅ Bot conectado ao WhatsApp!');
             console.log('📱 Número:', sock.user.id.split(':')[0]);
             console.log('🤖 Nome:', sock.user.name);
+            // Remove o arquivo QR se existir
+            if (fs.existsSync('/app/qr-code.png')) {
+                fs.unlinkSync('/app/qr-code.png');
+                console.log('🗑️ QR Code removido (conectado)');
+            }
         }
     });
 
