@@ -32,6 +32,7 @@ setInterval(() => {
     console.log('🧹 Cache de mensagens limpo');
 }, TEMPO_LIMPEZA_MS);
 
+// ===== SERVIDOR WEB CORRIGIDO =====
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -41,73 +42,469 @@ const server = http.createServer((req, res) => {
     if (url === '/') {
         res.end(`
             <!DOCTYPE html>
-            <html>
+            <html lang="pt-BR">
             <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
                 <title>${STORE_NAME} - Bot WhatsApp</title>
-                <meta name="viewport" content="width=device-width, initial-scale=1">
                 <style>
+                    * {
+                        margin: 0;
+                        padding: 0;
+                        box-sizing: border-box;
+                    }
+                    
                     body { 
-                        font-family: Arial, sans-serif; 
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                         text-align: center; 
-                        padding: 50px; 
-                        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                        padding: 20px; 
+                        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
                         color: white;
                         min-height: 100vh;
-                        margin: 0;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
                     }
+                    
+                    .container {
+                        width: 100%;
+                        max-width: 600px;
+                        padding: 20px;
+                    }
+                    
+                    h1 { 
+                        color: #00d9ff; 
+                        text-shadow: 0 0 20px rgba(0,217,255,0.5);
+                        font-size: 2.5rem;
+                        margin-bottom: 10px;
+                        word-wrap: break-word;
+                    }
+                    
+                    .subtitle {
+                        color: #a0a0a0;
+                        font-size: 1.1rem;
+                        margin-bottom: 30px;
+                    }
+                    
                     .status { 
                         padding: 20px; 
                         border-radius: 15px; 
                         margin: 20px auto;
-                        font-size: 20px;
-                        max-width: 500px;
-                        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                        font-size: 1.2rem;
+                        font-weight: bold;
+                        max-width: 100%;
+                        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                        transition: all 0.3s ease;
+                        word-wrap: break-word;
                     }
-                    .online { background: linear-gradient(135deg, #4CAF50, #45a049); }
-                    .offline { background: linear-gradient(135deg, #f44336, #da190b); }
-                    h1 { color: #00d9ff; text-shadow: 0 0 10px rgba(0,217,255,0.5); }
+                    
+                    .online { 
+                        background: linear-gradient(135deg, #00b894, #00a085);
+                        border: 2px solid #00d9a3;
+                    }
+                    
+                    .offline { 
+                        background: linear-gradient(135deg, #e17055, #d63031);
+                        border: 2px solid #ff7675;
+                    }
+                    
                     .btn {
                         background: linear-gradient(135deg, #00d9ff, #0099cc);
                         color: #1a1a2e;
-                        padding: 20px 40px;
+                        padding: 18px 40px;
                         text-decoration: none;
-                        border-radius: 30px;
+                        border-radius: 50px;
                         font-weight: bold;
-                        font-size: 18px;
+                        font-size: 1.1rem;
                         display: inline-block;
-                        margin: 20px;
-                        box-shadow: 0 4px 15px rgba(0,217,255,0.4);
+                        margin: 20px 10px;
+                        box-shadow: 0 8px 25px rgba(0,217,255,0.4);
+                        transition: all 0.3s ease;
+                        border: none;
+                        cursor: pointer;
+                    }
+                    
+                    .btn:hover {
+                        transform: translateY(-3px);
+                        box-shadow: 0 12px 35px rgba(0,217,255,0.6);
+                    }
+                    
+                    .btn-success {
+                        background: linear-gradient(135deg, #00b894, #00a085);
+                        color: white;
+                        box-shadow: 0 8px 25px rgba(0,184,148,0.4);
+                    }
+                    
+                    .info-box {
+                        background: rgba(255,255,255,0.1);
+                        backdrop-filter: blur(10px);
+                        padding: 25px;
+                        border-radius: 20px;
+                        margin: 30px auto;
+                        max-width: 100%;
+                        border: 1px solid rgba(255,255,255,0.2);
+                    }
+                    
+                    .info-box p {
+                        margin: 10px 0;
+                        font-size: 1rem;
+                        word-wrap: break-word;
+                    }
+                    
+                    .pulse {
+                        animation: pulse 2s infinite;
+                    }
+                    
+                    @keyframes pulse {
+                        0%, 100% { opacity: 1; transform: scale(1); }
+                        50% { opacity: 0.8; transform: scale(0.98); }
+                    }
+                    
+                    .icon {
+                        font-size: 3rem;
+                        margin-bottom: 15px;
+                    }
+                    
+                    /* Responsivo */
+                    @media (max-width: 480px) {
+                        h1 { font-size: 1.8rem; }
+                        .subtitle { font-size: 0.9rem; }
+                        .status { font-size: 1rem; padding: 15px; }
+                        .btn { padding: 15px 30px; font-size: 1rem; width: 90%; margin: 10px auto; }
+                        .icon { font-size: 2.5rem; }
                     }
                 </style>
             </head>
             <body>
-                <h1>🎮 ${STORE_NAME} Bot</h1>
-                <div class="status ${botConectado ? 'online' : 'offline'}">
-                    ${botConectado ? '✅ Bot Conectado!' : '⏳ Aguardando QR Code...'}
+                <div class="container">
+                    <div class="icon">🎮</div>
+                    <h1>${STORE_NAME}</h1>
+                    <p class="subtitle">Bot WhatsApp Automatizado</p>
+                    
+                    <div class="status ${botConectado ? 'online' : 'offline'} ${!botConectado ? 'pulse' : ''}">
+                        ${botConectado ? '✅ Bot Conectado e Online!' : '⏳ Aguardando Conexão...'}
+                    </div>
+                    
+                    ${!botConectado ? `
+                        <a href="/qr" class="btn">📱 Escanear QR Code</a>
+                        <br>
+                        <a href="/qr" class="btn" style="background: linear-gradient(135deg, #fdcb6e, #e17055); color: white;">🔄 Atualizar Página</a>
+                    ` : '<div class="btn btn-success">🚀 Sistema Online!</div>'}
+                    
+                    <div class="info-box">
+                        <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
+                        <p><strong>👑 Suporte:</strong> +${ADMIN_NUMBER}</p>
+                        <p style="margin-top: 15px; font-size: 0.9rem; color: #b0b0b0;">
+                            ${!botConectado ? 'Clique no botão acima para ver o QR Code' : 'Sistema operando normalmente'}
+                        </p>
+                    </div>
                 </div>
-                ${!botConectado ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : '<div class="btn" style="background: #4CAF50;">🚀 Online!</div>'}
             </body>
             </html>
         `);
     }
     else if (url === '/qr') {
         if (botConectado) {
-            res.end(`<html><body style="text-align:center;padding:50px;"><h1>✅ Já Conectado!</h1></body></html>`);
+            res.end(`
+                <!DOCTYPE html>
+                <html lang="pt-BR">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                    <title>Conectado - ${STORE_NAME}</title>
+                    <style>
+                        * { margin: 0; padding: 0; box-sizing: border-box; }
+                        body { 
+                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                            text-align: center; 
+                            padding: 20px; 
+                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                            color: white;
+                            min-height: 100vh;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                        }
+                        .success { 
+                            background: linear-gradient(135deg, #00b894, #00a085);
+                            padding: 40px; 
+                            border-radius: 25px; 
+                            margin: 20px;
+                            max-width: 90%;
+                            box-shadow: 0 15px 50px rgba(0,0,0,0.3);
+                            border: 2px solid #00d9a3;
+                        }
+                        h1 { font-size: 2rem; margin-bottom: 15px; }
+                        p { font-size: 1.2rem; opacity: 0.9; }
+                        .icon { font-size: 4rem; margin-bottom: 20px; }
+                        a { color: #00d9ff; text-decoration: none; margin-top: 20px; display: inline-block; }
+                    </style>
+                </head>
+                <body>
+                    <div class="success">
+                        <div class="icon">✅</div>
+                        <h1>Bot Já Conectado!</h1>
+                        <p>O sistema está online e funcionando.</p>
+                        <a href="/">← Voltar ao início</a>
+                    </div>
+                </body>
+                </html>
+            `);
         } else if (qrCodeDataURL) {
             res.end(`
                 <!DOCTYPE html>
-                <html>
-                <head><title>QR Code</title><meta http-equiv="refresh" content="5"></head>
-                <body style="text-align:center;background:#1a1a2e;color:white;">
-                    <h1>📱 Escaneie o QR Code</h1>
-                    <img src="${qrCodeDataURL}" style="width:400px;max-width:90%;background:white;padding:20px;border-radius:20px;">
-                    <p>Atualizando automaticamente...</p>
+                <html lang="pt-BR">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                    <meta http-equiv="refresh" content="8">
+                    <title>QR Code - ${STORE_NAME}</title>
+                    <style>
+                        * { margin: 0; padding: 0; box-sizing: border-box; }
+                        
+                        body { 
+                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                            text-align: center; 
+                            padding: 15px; 
+                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+                            color: white;
+                            min-height: 100vh;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: flex-start;
+                            padding-top: 20px;
+                        }
+                        
+                        .container {
+                            width: 100%;
+                            max-width: 500px;
+                            padding: 10px;
+                        }
+                        
+                        h1 { 
+                            color: #00d9ff; 
+                            font-size: 1.8rem;
+                            margin-bottom: 5px;
+                            text-shadow: 0 0 15px rgba(0,217,255,0.5);
+                        }
+                        
+                        h2 {
+                            font-size: 1.3rem;
+                            margin-bottom: 20px;
+                            color: #e0e0e0;
+                        }
+                        
+                        .qr-wrapper {
+                            background: white;
+                            padding: 25px;
+                            border-radius: 25px;
+                            box-shadow: 0 15px 50px rgba(0,0,0,0.4);
+                            margin: 20px auto;
+                            max-width: 320px;
+                            width: 90%;
+                            position: relative;
+                        }
+                        
+                        .qr-wrapper::before {
+                            content: '📱';
+                            position: absolute;
+                            top: -15px;
+                            left: 50%;
+                            transform: translateX(-50%);
+                            font-size: 2rem;
+                            background: #00d9ff;
+                            width: 50px;
+                            height: 50px;
+                            border-radius: 50%;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            box-shadow: 0 5px 15px rgba(0,217,255,0.4);
+                        }
+                        
+                        .qr-wrapper img { 
+                            width: 100%;
+                            max-width: 280px;
+                            height: auto;
+                            display: block;
+                            margin: 10px auto;
+                        }
+                        
+                        .info-box {
+                            background: rgba(255,255,255,0.1);
+                            backdrop-filter: blur(10px);
+                            padding: 20px;
+                            border-radius: 20px;
+                            margin: 25px auto;
+                            max-width: 100%;
+                            border: 1px solid rgba(255,255,255,0.2);
+                            text-align: left;
+                        }
+                        
+                        .info-box h3 {
+                            color: #00d9ff;
+                            margin-bottom: 15px;
+                            text-align: center;
+                            font-size: 1.1rem;
+                        }
+                        
+                        .info-box ol {
+                            padding-left: 20px;
+                            line-height: 1.8;
+                        }
+                        
+                        .info-box li {
+                            margin-bottom: 8px;
+                            font-size: 0.95rem;
+                        }
+                        
+                        .atualizando {
+                            color: #fdcb6e;
+                            animation: pulse 1.5s infinite;
+                            font-weight: bold;
+                            margin-top: 15px;
+                            font-size: 0.9rem;
+                        }
+                        
+                        .timer {
+                            color: #a0a0a0;
+                            font-size: 0.8rem;
+                            margin-top: 10px;
+                        }
+                        
+                        @keyframes pulse {
+                            0%, 100% { opacity: 1; }
+                            50% { opacity: 0.6; }
+                        }
+                        
+                        .btn-voltar {
+                            background: rgba(255,255,255,0.2);
+                            color: white;
+                            padding: 12px 30px;
+                            text-decoration: none;
+                            border-radius: 25px;
+                            margin-top: 20px;
+                            display: inline-block;
+                            border: 1px solid rgba(255,255,255,0.3);
+                            transition: all 0.3s ease;
+                        }
+                        
+                        .btn-voltar:hover {
+                            background: rgba(255,255,255,0.3);
+                        }
+                        
+                        /* Responsivo */
+                        @media (max-width: 480px) {
+                            h1 { font-size: 1.5rem; }
+                            h2 { font-size: 1.1rem; }
+                            .qr-wrapper { padding: 20px; max-width: 280px; }
+                            .qr-wrapper img { max-width: 220px; }
+                            .info-box { padding: 15px; }
+                            .info-box li { font-size: 0.85rem; }
+                        }
+                        
+                        @media (max-width: 320px) {
+                            .qr-wrapper { max-width: 240px; }
+                            .qr-wrapper img { max-width: 180px; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <h1>🎮 ${STORE_NAME}</h1>
+                        <h2>Escaneie o QR Code</h2>
+                        
+                        <div class="qr-wrapper">
+                            <img src="${qrCodeDataURL}" alt="QR Code WhatsApp">
+                        </div>
+                        
+                        <div class="atualizando">🔄 Atualizando automaticamente...</div>
+                        <div class="timer">A página recarrega em 8 segundos</div>
+                        
+                        <div class="info-box">
+                            <h3>📖 Como conectar:</h3>
+                            <ol>
+                                <li>Abra o <strong>WhatsApp</strong> no celular</li>
+                                <li>Toque em <strong>Configurações</strong> (ou ⋮)</li>
+                                <li>Selecione <strong>WhatsApp Web</strong></li>
+                                <li>Aponte a câmera para o QR Code acima</li>
+                                <li>Aguarde a conexão ser estabelecida</li>
+                            </ol>
+                        </div>
+                        
+                        <a href="/" class="btn-voltar">← Voltar ao início</a>
+                    </div>
                 </body>
                 </html>
             `);
         } else {
-            res.end(`<html><body style="text-align:center;"><h1>⏳ Gerando...</h1><meta http-equiv="refresh" content="3"></body></html>`);
+            res.end(`
+                <!DOCTYPE html>
+                <html lang="pt-BR">
+                <head>
+                    <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                    <meta http-equiv="refresh" content="3">
+                    <title>Gerando - ${STORE_NAME}</title>
+                    <style>
+                        * { margin: 0; padding: 0; box-sizing: border-box; }
+                        body { 
+                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                            text-align: center; 
+                            padding: 20px; 
+                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                            color: white;
+                            min-height: 100vh;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                        }
+                        .loading { 
+                            font-size: 1.5rem; 
+                            animation: pulse 1.5s infinite;
+                            margin-top: 20px;
+                        }
+                        .spinner {
+                            width: 60px;
+                            height: 60px;
+                            border: 5px solid rgba(255,255,255,0.1);
+                            border-top: 5px solid #00d9ff;
+                            border-radius: 50%;
+                            animation: spin 1s linear infinite;
+                            margin: 20px auto;
+                        }
+                        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+                        h1 { color: #00d9ff; margin-bottom: 10px; }
+                        p { color: #a0a0a0; }
+                    </style>
+                </head>
+                <body>
+                    <h1>🎮 ${STORE_NAME}</h1>
+                    <div class="spinner"></div>
+                    <p class="loading">Gerando QR Code...</p>
+                    <p>Aguarde alguns segundos</p>
+                </body>
+                </html>
+            `);
         }
+    }
+    else if (url === '/api/status') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+            conectado: botConectado,
+            numero: botConectado ? BOT_NUMBER : null,
+            temQR: !!qrCodeDataURL,
+            timestamp: new Date().toISOString()
+        }));
+    }
+    else if (url === '/health') {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ status: 'ok', bot: botConectado }));
     }
     else {
         res.writeHead(302, { 'Location': '/' });
@@ -116,16 +513,22 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🌐 Servidor rodando na porta ${PORT}`);
+    console.log(`🌐 Servidor web rodando na porta ${PORT}`);
+    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
 });
 
 async function atualizarQRCode(qr) {
     try {
         const QRCode = require('qrcode');
-        qrCodeDataURL = await QRCode.toDataURL(qr, { width: 500, margin: 2 });
+        qrCodeDataURL = await QRCode.toDataURL(qr, {
+            width: 400,
+            margin: 2,
+            color: { dark: '#000000', light: '#FFFFFF' }
+        });
+        console.log('📱 QR Code atualizado na web!');
         qrcode.generate(qr, { small: true });
     } catch (err) {
-        console.error('Erro QR:', err);
+        console.error('Erro ao gerar QR Code:', err);
     }
 }
 
@@ -333,14 +736,11 @@ async function connectToWhatsApp() {
                     msg += `\n🎮 Total: ${total}`;
                     await sock.sendMessage(sender, { text: msg });
                 } else if (text === '5') {
-                    // PERFIL ATUALIZADO COM NOME, JOGOS RESGATADOS E TEMPO DE USO
+                    // PERFIL ATUALIZADO
                     const p = db.getPerfil(sender);
                     const numLimpo = sender.replace('@s.whatsapp.net', '').split(':')[0];
                     
-                    // Calcula tempo de uso
                     const tempoUso = calcularTempoUso(p.dataRegistro);
-                    
-                    // Conta quantos jogos diferentes ele resgatou (baseado nas keys)
                     const jogosResgatados = p.keysResgatadas ? p.keysResgatadas.length : 0;
                     
                     let msg = `👤 *MEU PERFIL*\n\n`;
