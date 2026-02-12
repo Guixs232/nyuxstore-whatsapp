@@ -26,18 +26,20 @@ const TEMPO_LIMPEZA_MS = 5 * 60 * 1000;
 let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
+let qrCodeRaw = null; // Guarda o QR raw para debug
 
 setInterval(() => {
     mensagensProcessadas.clear();
     console.log('🧹 Cache de mensagens limpo');
 }, TEMPO_LIMPEZA_MS);
 
-// ===== SERVIDOR WEB - VERSÃO ANTIGA (FUNCIONANDO) =====
+// ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
 
     const url = req.url;
+    console.log(`🌐 Acesso: ${url} | botConectado: ${botConectado} | temQR: ${!!qrCodeDataURL}`);
 
     if (url === '/') {
         res.end(`
@@ -46,6 +48,7 @@ const server = http.createServer((req, res) => {
             <head>
                 <title>${STORE_NAME} - Bot WhatsApp</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
+                <meta http-equiv="refresh" content="3">
                 <style>
                     body { 
                         font-family: Arial, sans-serif; 
@@ -66,6 +69,7 @@ const server = http.createServer((req, res) => {
                     }
                     .online { background: linear-gradient(135deg, #4CAF50, #45a049); }
                     .offline { background: linear-gradient(135deg, #f44336, #da190b); }
+                    .waiting { background: linear-gradient(135deg, #ff9800, #f57c00); animation: pulse 2s infinite; }
                     h1 { color: #00d9ff; text-shadow: 0 0 10px rgba(0,217,255,0.5); }
                     .btn {
                         background: linear-gradient(135deg, #00d9ff, #0099cc);
@@ -86,23 +90,33 @@ const server = http.createServer((req, res) => {
                         margin: 20px auto;
                         max-width: 600px;
                     }
+                    @keyframes pulse {
+                        0%, 100% { opacity: 1; }
+                        50% { opacity: 0.7; }
+                    }
                 </style>
             </head>
             <body>
                 <h1>🎮 ${STORE_NAME} Bot</h1>
-                <div class="status ${botConectado ? 'online' : 'offline'}">
-                    ${botConectado ? '✅ Bot Conectado e Online!' : '⏳ Aguardando QR Code...'}
+                <div class="status ${botConectado ? 'online' : (qrCodeDataURL ? 'waiting' : 'offline')}">
+                    ${botConectado ? '✅ Bot Conectado e Online!' : (qrCodeDataURL ? '📱 QR Code Pronto!' : '⏳ Aguardando QR Code...')}
                 </div>
-                ${!botConectado ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : '<div class="btn" style="background: #4CAF50;">🚀 Bot Online!</div>'}
+                ${!botConectado && qrCodeDataURL ? `<a href="/qr" class="btn">📱 Ver QR Code</a>` : ''}
+                ${botConectado ? '<div class="btn" style="background: #4CAF50;">🚀 Bot Online!</div>' : ''}
                 <div class="info">
                     <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
                     <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
+                    <p style="margin-top: 15px; font-size: 0.9rem; color: #aaa;">
+                        Status: ${botConectado ? 'Conectado' : (qrCodeDataURL ? 'QR Gerado' : 'Gerando...')}
+                    </p>
                 </div>
             </body>
             </html>
         `);
     }
     else if (url === '/qr') {
+        console.log(`📱 Página QR solicitada. qrCodeDataURL existe: ${!!qrCodeDataURL}, tamanho: ${qrCodeDataURL ? qrCodeDataURL.length : 0}`);
+        
         if (botConectado) {
             res.end(`
                 <!DOCTYPE html>
@@ -122,7 +136,7 @@ const server = http.createServer((req, res) => {
                 </body>
                 </html>
             `);
-        } else if (qrCodeDataURL) {
+        } else if (qrCodeDataURL && qrCodeDataURL.length > 100) {
             res.end(`
                 <!DOCTYPE html>
                 <html>
@@ -149,8 +163,14 @@ const server = http.createServer((req, res) => {
                             border-radius: 25px;
                             box-shadow: 0 10px 40px rgba(0,0,0,0.5);
                             margin: 20px;
+                            max-width: 90vw;
                         }
-                        .qr-container img { width: 400px; max-width: 90vw; }
+                        .qr-container img { 
+                            width: 400px; 
+                            max-width: 80vw; 
+                            height: auto;
+                            display: block;
+                        }
                         .info {
                             background: rgba(255,255,255,0.1);
                             padding: 25px;
@@ -173,7 +193,10 @@ const server = http.createServer((req, res) => {
                     <h1>🎮 ${STORE_NAME}</h1>
                     <h2>📱 Escaneie o QR Code</h2>
                     <div class="qr-container">
-                        <img src="${qrCodeDataURL}" alt="QR Code">
+                        <img src="${qrCodeDataURL}" alt="QR Code WhatsApp" onerror="this.style.display='none'; document.getElementById('erro').style.display='block';">
+                        <div id="erro" style="display:none; color:red; padding:20px;">
+                            Erro ao carregar QR Code. Atualize a página.
+                        </div>
                     </div>
                     <div class="info">
                         <p class="atualizando">🔄 Atualizando automaticamente...</p>
@@ -190,16 +213,31 @@ const server = http.createServer((req, res) => {
                 <html>
                 <head>
                     <title>Gerando - ${STORE_NAME}</title>
-                    <meta http-equiv="refresh" content="3">
+                    <meta http-equiv="refresh" content="2">
                     <style>
                         body { font-family: Arial; text-align: center; padding: 50px; background: #1a1a2e; color: white; }
                         .loading { font-size: 28px; animation: pulse 1s infinite; }
                         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+                        .spinner {
+                            border: 4px solid rgba(255,255,255,0.1);
+                            border-left-color: #00d9ff;
+                            border-radius: 50%;
+                            width: 50px;
+                            height: 50px;
+                            animation: spin 1s linear infinite;
+                            margin: 20px auto;
+                        }
+                        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                     </style>
                 </head>
                 <body>
                     <h1>⏳ Gerando QR Code...</h1>
-                    <p class="loading">Aguarde...</p>
+                    <div class="spinner"></div>
+                    <p class="loading">Aguarde o bot conectar...</p>
+                    <p style="color: #888; font-size: 0.9rem;">Isso pode levar alguns segundos</p>
+                    <p style="color: #666; font-size: 0.8rem; margin-top: 20px;">
+                        Debug: bot=${botConectado}, qr=${qrCodeDataURL ? 'existe' : 'null'}, tamanho=${qrCodeDataURL ? qrCodeDataURL.length : 0}
+                    </p>
                 </body>
                 </html>
             `);
@@ -209,8 +247,8 @@ const server = http.createServer((req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify({
             conectado: botConectado,
-            numero: botConectado ? BOT_NUMBER : null,
-            temQR: !!qrCodeDataURL,
+            temQR: !!qrCodeDataURL && qrCodeDataURL.length > 100,
+            qrTamanho: qrCodeDataURL ? qrCodeDataURL.length : 0,
             timestamp: new Date().toISOString()
         }));
     }
@@ -226,21 +264,52 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Servidor web rodando na porta ${PORT}`);
-    console.log(`📱 QR Code disponível em: http://localhost:${PORT}/qr`);
+    console.log(`📱 Acesse: http://localhost:${PORT}/qr`);
 });
 
+// ===== FUNÇÃO QR CODE COM DEBUG =====
 async function atualizarQRCode(qr) {
+    console.log('📱 FUNÇÃO atualizarQRCode CHAMADA!');
+    console.log('📱 QR recebido (primeiros 50 chars):', qr ? qr.substring(0, 50) : 'NULL');
+    
     try {
         const QRCode = require('qrcode');
-        qrCodeDataURL = await QRCode.toDataURL(qr, {
+        
+        // Guarda o QR raw
+        qrCodeRaw = qr;
+        
+        console.log('📱 Gerando Data URL...');
+        
+        // Gera Data URL
+        const dataUrl = await QRCode.toDataURL(qr, {
+            type: 'image/png',
             width: 500,
             margin: 2,
-            color: { dark: '#000000', light: '#FFFFFF' }
+            color: {
+                dark: '#000000',
+                light: '#FFFFFF'
+            }
         });
-        console.log('📱 QR Code atualizado na web!');
+        
+        console.log('📱 Data URL gerada! Tamanho:', dataUrl.length);
+        console.log('📱 Primeiros 100 chars:', dataUrl.substring(0, 100));
+        
+        // Só atualiza se gerou corretamente
+        if (dataUrl && dataUrl.startsWith('data:image/png;base64,')) {
+            qrCodeDataURL = dataUrl;
+            console.log('✅ QR Code salvo com sucesso!');
+            console.log('✅ qrCodeDataURL agora tem:', qrCodeDataURL.length, 'caracteres');
+        } else {
+            console.error('❌ Data URL inválida:', dataUrl ? dataUrl.substring(0, 50) : 'null');
+        }
+        
+        // Mostra no terminal também
+        console.log('📱 QR Code no terminal:');
         qrcode.generate(qr, { small: true });
+        
     } catch (err) {
-        console.error('Erro ao gerar QR Code:', err);
+        console.error('❌ ERRO ao gerar QR Code:', err.message);
+        console.error(err.stack);
     }
 }
 
@@ -311,44 +380,68 @@ function calcularTempoUso(dataRegistro) {
     return 'Agora mesmo';
 }
 
+// ===== CONEXÃO WHATSAPP =====
 async function connectToWhatsApp() {
+    console.log('🔌 Iniciando conexão com WhatsApp...');
+    
     const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
+    console.log('🔌 Criando socket...');
+    
     const sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: ['NyuxStore Bot', 'Chrome', '1.0']
+        browser: ['NyuxStore Bot', 'Chrome', '1.0.0'],
+        printQRInTerminal: false
     });
 
     sockGlobal = sock;
 
+    console.log('🔌 Socket criado. Aguardando eventos...');
+
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
+        console.log('📡 Evento connection.update:', { connection, temQR: !!qr, temLastDisconnect: !!lastDisconnect });
+        
+        // QUANDO RECEBER QR CODE
         if (qr) {
-            console.log('📱 Novo QR Code recebido!');
+            console.log('🎯🎯🎯 QR CODE RECEBIDO! 🎯🎯🎯');
+            console.log('🎯 Tamanho do QR:', qr.length);
+            console.log('🎯 Chamando atualizarQRCode...');
             await atualizarQRCode(qr);
+            console.log('🎯 atualizarQRCode finalizado. qrCodeDataURL existe:', !!qrCodeDataURL);
         }
         
         if (connection === 'close') {
+            console.log('❌ Conexão fechada!');
             botConectado = false;
             qrCodeDataURL = null;
+            qrCodeRaw = null;
+            
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
+            console.log('🔄 Reconectar?', shouldReconnect);
+            
             if (shouldReconnect) {
+                console.log('⏳ Reconectando em 5 segundos...');
                 setTimeout(connectToWhatsApp, 5000);
             }
         } else if (connection === 'open') {
+            console.log('✅✅✅ CONECTADO! ✅✅✅');
             botConectado = true;
             qrCodeDataURL = null;
-            console.log('✅ Bot conectado ao WhatsApp!');
+            qrCodeRaw = null;
+            console.log('📱 Bot número:', sock.user?.id);
+        } else if (connection === 'connecting') {
+            console.log('⏳ Conectando...');
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Mensagens
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
@@ -453,7 +546,6 @@ async function connectToWhatsApp() {
                     msg += `\n🎮 Total: ${total}`;
                     await sock.sendMessage(sender, { text: msg });
                 } else if (text === '5') {
-                    // PERFIL ATUALIZADO
                     const p = db.getPerfil(sender);
                     const numLimpo = sender.replace('@s.whatsapp.net', '').split(':')[0];
                     
