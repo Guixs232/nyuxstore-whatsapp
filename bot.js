@@ -7,17 +7,27 @@ const moment = require('moment');
 
 // Configurações
 const BOT_NUMBER = '556183040115';
-const ADMIN_NUMBER = '5518997972598';
+const ADMIN_NUMBER = '5518997972598'; // Seu número principal (apenas dígitos)
 const STORE_NAME = 'NyuxStore';
 const PORT = process.env.PORT || 8080;
 
 const db = new Database();
 const userStates = new Map();
 
+// Controle de mensagens processadas (evita duplicatas)
+const mensagensProcessadas = new Set();
+const TEMPO_LIMPEZA_MS = 5 * 60 * 1000; // Limpa mensagens antigas a cada 5 minutos
+
 // Variáveis globais
 let qrCodeDataURL = null;
 let botConectado = false;
 let sockGlobal = null;
+
+// Limpa mensagens antigas periodicamente
+setInterval(() => {
+    mensagensProcessadas.clear();
+    console.log('🧹 Cache de mensagens limpo');
+}, TEMPO_LIMPEFA_MS);
 
 // ===== SERVIDOR WEB =====
 const server = http.createServer((req, res) => {
@@ -227,11 +237,26 @@ async function atualizarQRCode(qr) {
             color: { dark: '#000000', light: '#FFFFFF' }
         });
         console.log('📱 QR Code atualizado na web!');
-        // Também mostra no terminal
         qrcode.generate(qr, { small: true });
     } catch (err) {
         console.error('Erro ao gerar QR Code:', err);
     }
+}
+
+// Função para verificar se é admin (CORRIGIDA)
+function verificarAdmin(sender) {
+    // Remove @s.whatsapp.net e @g.us e qualquer sufixo após :
+    const numeroLimpo = sender
+        .replace('@s.whatsapp.net', '')
+        .replace('@g.us', '')
+        .split(':')[0]; // Remove o :1 ou :2 que o WhatsApp adiciona
+    
+    console.log('🔍 DEBUG - Sender original:', sender);
+    console.log('🔍 DEBUG - Número limpo:', numeroLimpo);
+    console.log('🔍 DEBUG - ADMIN_NUMBER:', ADMIN_NUMBER);
+    console.log('🔍 DEBUG - Comparação:', numeroLimpo === ADMIN_NUMBER);
+    
+    return numeroLimpo === ADMIN_NUMBER;
 }
 
 // Menus
@@ -296,7 +321,7 @@ _Digite o número da opção_`;
 
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
-    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
+    const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, delay, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = await import('@whiskeysockets/baileys');
     
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -306,13 +331,19 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         version,
         logger: pino({ level: 'silent' }),
-        // REMOVIDO: printQRInTerminal (deprecated)
-        auth: state,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+        },
         browser: ['NyuxStore Bot', 'Chrome', '1.0'],
         syncFullHistory: false,
         markOnlineOnConnect: true,
         keepAliveIntervalMs: 30000,
-        shouldIgnoreJid: jid => false
+        shouldIgnoreJid: jid => false,
+        // Configurações para evitar duplicatas
+        msgRetryCounterMap: {},
+        defaultQueryTimeoutMs: undefined,
+        syncFullHistory: false
     });
 
     sockGlobal = sock;
@@ -320,7 +351,6 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        // NOVO: QR Code vem aqui agora
         if (qr) {
             console.log('📱 Novo QR Code recebido!');
             await atualizarQRCode(qr);
@@ -345,15 +375,38 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Processar mensagens
+    // Processar mensagens com controle de duplicatas
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
+        
+        // Ignora mensagens do próprio bot
         if (!msg.message || msg.key.fromMe) return;
+
+        // Cria ID único da mensagem para evitar duplicatas
+        const msgId = msg.key.id;
+        const participant = msg.key.participant || msg.key.remoteJid;
+        const uniqueId = `${msgId}_${participant}`;
+        
+        // Verifica se já processou esta mensagem
+        if (mensagensProcessadas.has(uniqueId)) {
+            console.log('🔄 Mensagem duplicada ignorada:', msgId);
+            return;
+        }
+        
+        // Marca como processada
+        mensagensProcessadas.add(uniqueId);
+        
+        // Limita tamanho do cache
+        if (mensagensProcessadas.size > 1000) {
+            const iterator = mensagensProcessadas.values();
+            mensagensProcessadas.delete(iterator.next().value);
+        }
 
         const sender = msg.key.remoteJid;
         const isGroup = sender.endsWith('@g.us');
         const pushName = msg.pushName || 'Cliente';
         
+        // Extrai texto da mensagem
         let text = '';
         let isMentioned = false;
         
@@ -375,6 +428,8 @@ async function connectToWhatsApp() {
 
         text = text.toLowerCase().trim();
         
+        console.log(`\n📩 Nova mensagem de ${pushName} (${sender}): "${text}"`);
+        
         // No grupo, só responde se mencionado ou com !
         if (isGroup) {
             const isCommand = text.startsWith('!');
@@ -382,20 +437,27 @@ async function connectToWhatsApp() {
             if (isCommand) text = text.substring(1).trim();
         }
 
-        const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us', '');
-        const isAdmin = numeroLimpo === ADMIN_NUMBER;
+        // Verifica admin usando função corrigida
+        const isAdmin = verificarAdmin(sender);
         const perfil = db.getPerfil(sender);
         const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
         const userState = userStates.get(sender) || { step: 'menu' };
 
         try {
-            // COMANDO ADMIN
+            // COMANDO ADMIN - COM LOGS DETALHADOS
             if (text === 'admin' || text === 'adm') {
+                console.log('🔑 Tentativa de acesso admin');
+                console.log('🔑 isAdmin:', isAdmin);
+                
                 if (isAdmin) {
+                    console.log('✅ Admin autorizado!');
                     userStates.set(sender, { step: 'admin_menu' });
                     await sock.sendMessage(sender, { text: getMenuAdmin() });
                 } else {
-                    await sock.sendMessage(sender, { text: '⛔ *Acesso Negado*' });
+                    console.log('❌ Acesso negado para:', sender);
+                    await sock.sendMessage(sender, { 
+                        text: '⛔ *Acesso Negado*\n\nVocê não tem permissão para acessar o painel admin.\n\nSe você é o dono, verifique se o número está correto no código.' 
+                    });
                 }
                 return;
             }
@@ -442,7 +504,7 @@ async function connectToWhatsApp() {
                     } else if (text === '2') {
                         await sock.sendMessage(sender, { text: '👑 Chamando admin...' });
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\n${pushName}\n${numeroLimpo}\nStatus: Teste expirado!`
+                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\n${pushName}\n${sender.replace('@s.whatsapp.net', '').split(':')[0]}\nStatus: Teste expirado!`
                         });
                     } else {
                         await sock.sendMessage(sender, { text: getMenuTesteExpirado(pushName) });
@@ -488,7 +550,8 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: msg });
                 } else if (text === '5') {
                     const p = db.getPerfil(sender);
-                    let msg = `👤 *Perfil*\n📱 ${numeroLimpo}\n⏱️ ${p.temAcesso ? '✅' : '❌'}\n🎮 Jogos: ${p.totalResgatados}`;
+                    const numLimpo = sender.replace('@s.whatsapp.net', '').split(':')[0];
+                    let msg = `👤 *Perfil*\n📱 ${numLimpo}\n⏱️ ${p.temAcesso ? '✅' : '❌'}\n🎮 Jogos: ${p.totalResgatados}`;
                     if (p.keyInfo) msg += `\n🔑 ${p.keyInfo.key}\n📅 ${p.keyInfo.expira}`;
                     if (p.usouTeste && !p.temAcesso) msg += `\n\n😢 Teste expirou!`;
                     await sock.sendMessage(sender, { text: msg });
@@ -497,7 +560,9 @@ async function connectToWhatsApp() {
                     await sock.sendMessage(sender, { text: '🎉 *Teste Grátis*\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ Só 1 por pessoa!\n\nDigite:' });
                 } else if (text === '0') {
                     await sock.sendMessage(sender, { text: '💬 Aguarde...' });
-                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { text: `📩 ${pushName}\n${numeroLimpo}` });
+                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { 
+                        text: `📩 ${pushName}\n${sender.replace('@s.whatsapp.net', '').split(':')[0]}` 
+                    });
                 } else {
                     await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
                 }
@@ -712,8 +777,7 @@ async function connectToWhatsApp() {
             }
 
         } catch (error) {
-            console.error('Erro:', error);
-            await sock.sendMessage(sender, { text: '❌ Erro. Digite *menu*' });
+            console.error('❌ Erro ao processar mensagem:', error);
         }
     });
 
@@ -722,6 +786,6 @@ async function connectToWhatsApp() {
 
 // Iniciar
 console.log('🚀 Iniciando NyuxStore...');
-console.log('👑 Admin:', ADMIN_NUMBER);
+console.log('👑 Admin configurado:', ADMIN_NUMBER);
 console.log('🤖 Bot:', BOT_NUMBER);
 connectToWhatsApp();
