@@ -24,12 +24,15 @@ const userStates = new Map();
 const mensagensProcessadas = new Set();
 const TEMPO_LIMPEZA_MS = 5 * 60 * 1000;
 
-let pairingCode = null;        // Código de pareamento
-let qrCodeDataURL = null;      // QR Code (backup)
+let pairingCode = null;
+let pairingCodeError = null;
+let qrCodeDataURL = null;
+let qrCodeRaw = null;
 let botConectado = false;
 let sockGlobal = null;
 let tentativasConexao = 0;
 let reconectando = false;
+let useQRFallback = false; // Força QR se pairing falhar
 
 setInterval(() => {
     mensagensProcessadas.clear();
@@ -48,6 +51,7 @@ const server = http.createServer((req, res) => {
             conectado: botConectado,
             temPairingCode: !!pairingCode,
             temQR: !!qrCodeDataURL,
+            erro: pairingCodeError,
             timestamp: new Date().toISOString()
         }));
         return;
@@ -83,6 +87,7 @@ const server = http.createServer((req, res) => {
                     .online { background: #4CAF50; }
                     .offline { background: #f44336; }
                     .waiting { background: #ff9800; animation: pulse 2s infinite; }
+                    .error { background: #f44336; color: white; }
                     h1 { color: #00d9ff; }
                     .pairing-box {
                         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -100,15 +105,15 @@ const server = http.createServer((req, res) => {
                         text-shadow: 0 0 20px rgba(255,255,255,0.5);
                         margin: 20px 0;
                     }
-                    .btn {
-                        background: #00d9ff;
-                        color: #1a1a2e;
-                        padding: 15px 30px;
-                        text-decoration: none;
-                        border-radius: 25px;
-                        font-weight: bold;
-                        display: inline-block;
-                        margin: 10px;
+                    .qr-fallback {
+                        background: white;
+                        padding: 20px;
+                        border-radius: 20px;
+                        margin: 20px auto;
+                        max-width: 350px;
+                    }
+                    .qr-fallback img {
+                        width: 100%;
                     }
                     .info {
                         background: rgba(255,255,255,0.1);
@@ -118,9 +123,14 @@ const server = http.createServer((req, res) => {
                         max-width: 600px;
                         text-align: left;
                     }
-                    .info ol {
-                        padding-left: 20px;
-                        line-height: 2;
+                    .info ol { padding-left: 20px; line-height: 2; }
+                    .erro-box {
+                        background: rgba(244,67,54,0.3);
+                        border: 2px solid #f44336;
+                        padding: 20px;
+                        border-radius: 15px;
+                        margin: 20px auto;
+                        max-width: 500px;
                     }
                     @keyframes pulse {
                         0%, 100% { opacity: 1; }
@@ -133,46 +143,51 @@ const server = http.createServer((req, res) => {
                 
                 ${botConectado ? `
                     <div class="status online">
-                        ✅ Bot Conectado!<br>
-                        <small>Número: ${BOT_NUMBER}</small>
+                        ✅ Bot Conectado!
                     </div>
                 ` : (pairingCode ? `
                     <div class="status waiting">
-                        ⏳ Aguardando conexão...
+                        ⏳ Use o código abaixo
                     </div>
                     <div class="pairing-box">
                         <h2>🔑 Código de Pareamento</h2>
                         <div class="pairing-code">${pairingCode}</div>
-                        <p>Digite este código no seu WhatsApp</p>
+                        <p>Válido por 2 minutos</p>
                     </div>
                     <div class="info">
                         <h3>📱 Como conectar:</h3>
                         <ol>
                             <li>Abra o <strong>WhatsApp</strong> no celular</li>
-                            <li>Toque em <strong>Configurações</strong> (⋮)</li>
-                            <li>Selecione <strong>Dispositivos Conectados</strong></li>
-                            <li>Toque em <strong>Conectar um dispositivo</strong></li>
-                            <li>Escolha <strong>"Conectar com número de telefone"</strong></li>
-                            <li>Digite o código acima: <strong>${pairingCode}</strong></li>
+                            <li>Configurações → <strong>Dispositivos Conectados</strong></li>
+                            <li><strong>Conectar um dispositivo</strong></li>
+                            <li>Escolha <strong>"Conectar com número"</strong></li>
+                            <li>Digite: <strong style="font-size:20px;">${pairingCode}</strong></li>
                         </ol>
                     </div>
                 ` : (qrCodeDataURL ? `
                     <div class="status waiting">
-                        📱 QR Code disponível
+                        📱 Escaneie o QR Code
                     </div>
-                    <img src="${qrCodeDataURL}" style="max-width: 300px; background: white; padding: 20px; border-radius: 20px;">
-                    <br><br>
-                    <p>Ou aguarde o código de pareamento...</p>
+                    <div class="qr-fallback">
+                        <img src="${qrCodeDataURL}" alt="QR Code">
+                    </div>
+                    <p>Ou aguarde novo código...</p>
+                ` : (pairingCodeError ? `
+                    <div class="erro-box">
+                        <h3>⚠️ ${pairingCodeError}</h3>
+                        <p>Tentando método alternativo...</p>
+                        <p>Tentativa: ${tentativasConexao}</p>
+                    </div>
                 ` : `
                     <div class="status offline">
-                        ⏳ Iniciando conexão...<br>
+                        ⏳ Iniciando...<br>
                         <small>Tentativa: ${tentativasConexao}</small>
                     </div>
-                `))}
+                `)))}
                 
-                <div class="info" style="text-align: center; margin-top: 30px;">
-                    <p><strong>🤖 Bot:</strong> +${BOT_NUMBER}</p>
-                    <p><strong>👑 Admin:</strong> +${ADMIN_NUMBER}</p>
+                <div class="info" style="text-align: center;">
+                    <p>🤖 Bot: +${BOT_NUMBER}</p>
+                    <p>👑 Admin: +${ADMIN_NUMBER}</p>
                 </div>
             </body>
             </html>
@@ -187,6 +202,83 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Servidor: http://localhost:${PORT}\n`);
 });
+
+async function gerarPairingCode(sock) {
+    try {
+        console.log('📱 Solicitando novo código de pareamento...');
+        
+        // Remove código antigo
+        pairingCode = null;
+        pairingCodeError = null;
+        
+        // Aguarda socket pronto
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Gera código
+        const code = await sock.requestPairingCode(BOT_NUMBER);
+        
+        if (!code || code.length !== 8) {
+            throw new Error('Código inválido retornado');
+        }
+        
+        pairingCode = code;
+        
+        console.log('\n╔════════════════════════════════════════╗');
+        console.log('║     🔑 CÓDIGO DE PAREAMENTO            ║');
+        console.log('╠════════════════════════════════════════╣');
+        console.log(`║                                        ║`);
+        console.log(`║         ${code}              ║`);
+        console.log(`║                                        ║`);
+        console.log('╚════════════════════════════════════════╝\n');
+        
+        console.log('📱 Como usar:');
+        console.log('   1. Abra WhatsApp no celular');
+        console.log('   2. Configurações → Dispositivos Conectados');
+        console.log('   3. Conectar um dispositivo');
+        console.log('   4. Escolha "Conectar com número de telefone"');
+        console.log(`   5. Digite: ${code}`);
+        console.log('\n⏳ Válido por 2 minutos...\n');
+        
+        // Auto-renova após 90 segundos
+        setTimeout(() => {
+            if (!botConectado && pairingCode === code) {
+                console.log('\n🔄 Código expirando, gerando novo...\n');
+                gerarPairingCode(sock);
+            }
+        }, 90000);
+        
+        return true;
+        
+    } catch (err) {
+        console.log('\n❌ Erro no pairing code:', err.message);
+        pairingCodeError = 'Código indisponível para este número';
+        return false;
+    }
+}
+
+async function gerarQRCode(qr) {
+    try {
+        console.log('📱 Gerando QR Code (fallback)...');
+        qrCodeRaw = qr;
+        
+        const QRCode = require('qrcode');
+        qrCodeDataURL = await QRCode.toDataURL(qr, { width: 400 });
+        
+        // Salva arquivo
+        await QRCode.toFile('qrcode.png', qr, { width: 400 });
+        
+        console.log('\n╔══════════════════════════════════════╗');
+        console.log('║      📱 QR CODE (Método 2)           ║');
+        console.log('╚══════════════════════════════════════╝\n');
+        qrcode.generate(qr, { small: false });
+        
+        console.log('\n📁 Arquivo salvo: qrcode.png');
+        console.log(`🌐 http://localhost:${PORT}\n`);
+        
+    } catch (err) {
+        console.error('❌ Erro QR:', err.message);
+    }
+}
 
 function verificarAdmin(sender) {
     const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us','').split(':')[0];
@@ -250,25 +342,27 @@ async function connectToWhatsApp() {
         } = await import('@whiskeysockets/baileys');
         
         const { version } = await fetchLatestBaileysVersion();
-        console.log(`📱 Versão Baileys: ${version.join('.')}`);
+        console.log(`📱 Versão: ${version.join('.')}`);
         
-        // Limpa credenciais se necessário
-        if (tentativasConexao > 3) {
+        // Limpa tudo se falhou antes
+        if (tentativasConexao > 2) {
             console.log('🧹 Limpando credenciais...');
             try {
                 fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-                tentativasConexao = 0;
+                pairingCode = null;
+                qrCodeDataURL = null;
+                useQRFallback = false;
             } catch (e) {}
         }
         
         const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
         
-        console.log('🔌 Criando socket...\n');
+        console.log('🔌 Criando conexão...\n');
         
         const sock = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
-            printQRInTerminal: false, // Desativa QR no terminal
+            printQRInTerminal: false,
             auth: state,
             browser: ['Chrome (Linux)', '', ''],
             markOnlineOnConnect: true,
@@ -277,92 +371,68 @@ async function connectToWhatsApp() {
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 30000,
-            // IMPORTANTE: Ativa pairing code
-            generateHighQualityLinkPreview: true
         });
 
         sockGlobal = sock;
 
-        // SOLICITA PAIRING CODE ASSIM QUE O SOCKET ESTÁ PRONTO
-        if (!sock.authState.creds.registered) {
-            console.log('📱 Solicitando código de pareamento...');
-            console.log(`📱 Para o número: +${BOT_NUMBER}\n`);
+        // Tenta pairing code se não estiver registrado
+        if (!sock.authState.creds.registered && !useQRFallback) {
+            const sucesso = await gerarPairingCode(sock);
             
-            try {
-                // Aguarda um pouco para o socket estar pronto
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                // Solicita o pairing code
-                const code = await sock.requestPairingCode(BOT_NUMBER);
-                pairingCode = code;
-                
-                console.log('╔════════════════════════════════════════╗');
-                console.log('║     🔑 CÓDIGO DE PAREAMENTO            ║');
-                console.log('╠════════════════════════════════════════╣');
-                console.log(`║                                        ║`);
-                console.log(`║         ${code}              ║`);
-                console.log(`║                                        ║`);
-                console.log('╚════════════════════════════════════════╝\n');
-                
-                console.log('📱 Como usar:');
-                console.log('   1. Abra WhatsApp no celular');
-                console.log('   2. Configurações → Dispositivos Conectados');
-                console.log('   3. Conectar um dispositivo');
-                console.log('   4. Escolha "Conectar com número de telefone"');
-                console.log(`   5. Digite: ${code}\n`);
-                
-                console.log(`🌐 Ou acesse: http://localhost:${PORT}\n`);
-                
-            } catch (err) {
-                console.log('⚠️  Erro ao solicitar pairing code:', err.message);
-                console.log('   Tentando QR Code como fallback...\n');
+            if (!sucesso) {
+                console.log('⚠️  Pairing code falhou, aguardando QR Code...\n');
+                useQRFallback = true;
             }
         }
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
-            // Se receber QR Code (fallback)
-            if (qr && !pairingCode) {
-                console.log('📱 QR Code recebido (fallback)...');
-                const QRCode = require('qrcode');
-                qrCodeDataURL = await QRCode.toDataURL(qr, { width: 400 });
-                
-                console.log('\n╔══════════════════════════════════════╗');
-                console.log('║      📱 QR CODE (Fallback)           ║');
-                console.log('╚══════════════════════════════════════╝\n');
-                qrcode.generate(qr, { small: false });
+            // QR Code como fallback
+            if (qr && (useQRFallback || !pairingCode)) {
+                await gerarQRCode(qr);
             }
             
             if (connection === 'close') {
                 botConectado = false;
-                pairingCode = null;
                 reconectando = false;
                 
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const erroMsg = lastDisconnect?.error?.message || '';
                 
-                console.log(`\n❌ CONEXÃO FECHADA! Código: ${statusCode}`);
+                console.log(`\n❌ CONEXÃO FECHADA!`);
+                console.log(`   Código: ${statusCode}`);
+                console.log(`   Erro: ${erroMsg}`);
                 
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut 
-                    && statusCode !== 405;
+                // Se deu "invalid pairing code", tenta QR na próxima
+                if (erroMsg.includes('pairing') || erroMsg.includes('code')) {
+                    console.log('   🔄 Código inválido, tentando QR Code na próxima...');
+                    useQRFallback = true;
+                }
+                
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
                 if (shouldReconnect) {
                     console.log(`⏳ Reconectando em ${delayMs/1000}s...\n`);
                     setTimeout(connectToWhatsApp, delayMs);
-                } else {
-                    console.log('🚫 Não reconectando. Verifique o número.\n');
                 }
             }
             else if (connection === 'open') {
                 botConectado = true;
                 pairingCode = null;
                 qrCodeDataURL = null;
+                pairingCodeError = null;
                 reconectando = false;
                 tentativasConexao = 0;
+                useQRFallback = false;
+                
+                // Limpa arquivos
+                try {
+                    if (fs.existsSync('qrcode.png')) fs.unlinkSync('qrcode.png');
+                } catch (e) {}
                 
                 console.log('\n✅✅✅ BOT CONECTADO! ✅✅✅');
-                console.log('📱 Número:', sock.user?.id?.split(':')[0]);
-                console.log('👤 Nome:', sock.user?.name, '\n');
+                console.log('📱 Número:', sock.user?.id?.split(':')[0], '\n');
             }
             else if (connection === 'connecting') {
                 console.log('⏳ Conectando...');
@@ -371,7 +441,6 @@ async function connectToWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // MENSAGENS
         sock.ev.on('messages.upsert', async (m) => {
             const msg = m.messages[0];
             if (!msg.message || msg.key.fromMe) return;
@@ -388,12 +457,10 @@ async function connectToWhatsApp() {
             if (isGroup) text = text.substring(1).trim();
 
             const isAdmin = verificarAdmin(sender);
-            const userState = userStates.get(sender) || { step: 'menu' };
 
             try {
                 if (text === 'admin') {
                     if (isAdmin) {
-                        userStates.set(sender, { step: 'admin_menu' });
                         await sock.sendMessage(sender, { text: getMenuAdmin() });
                     } else {
                         await sock.sendMessage(sender, { text: '⛔ Acesso Negado' });
@@ -411,13 +478,13 @@ async function connectToWhatsApp() {
         });
 
     } catch (err) {
-        console.error('❌ Erro:', err.message);
+        console.error('❌ Erro fatal:', err.message);
         reconectando = false;
         setTimeout(connectToWhatsApp, 10000);
     }
 }
 
-console.log('🚀 Iniciando NyuxStore com Pairing Code...\n');
-console.log('📱 O código de 8 dígitos aparecerá aqui em breve!\n');
+console.log('🚀 Iniciando com Pairing Code + QR Fallback...\n');
+console.log('📱 O código aparecerá em alguns segundos...\n');
 
 connectToWhatsApp();
