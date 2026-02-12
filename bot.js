@@ -36,14 +36,13 @@ pastasParaLimpar.forEach(pasta => {
 console.log('');
 
 // ==========================================
-// PARSER DE CONTAS STEAM - VERSÃO MÚLTIPLAS CONTAS
+// PARSER DE CONTAS STEAM - CORRIGIDO
 // ==========================================
 class ContasSteamParser {
     constructor() {
         this.contas = [];
         this.contasRemovidas = [];
 
-        // Palavras que indicam conta problemática
         this.palavrasBloqueadas = [
             'mande mensagem', 'manda mensagem', 'whatsapp para conseguir',
             'chamar no whatsapp', 'solicitar acesso', 'pedir acesso',
@@ -88,7 +87,7 @@ class ContasSteamParser {
         return '🎮 Ação/Aventura';
     }
 
-    // NOVO: Processa múltiplas contas de uma vez (uma por linha)
+    // CORRIGIDO: Processa múltiplas contas de uma vez
     processarMultiplasContas(texto) {
         const linhas = texto.split('\n').filter(l => l.trim());
         const resultados = {
@@ -99,7 +98,7 @@ class ContasSteamParser {
 
         for (const linha of linhas) {
             const conta = this.parseLinhaSimples(linha.trim());
-
+            
             if (conta) {
                 // Verifica se é problemática
                 const verificacao = this.verificarContaProblematica(conta);
@@ -120,40 +119,42 @@ class ContasSteamParser {
         return resultados;
     }
 
-    // NOVO: Parse de linha simples (NÚMERO JOGO LOGIN SENHA)
+    // CORRIGIDO: Parse de linha simples
     parseLinhaSimples(linha) {
         // Remove emojis e caracteres especiais do início
-        linha = linha.replace(/^[🔢🎮👤🔒✅❌📱]+/g, '').trim();
-
-        // Padrões comuns:
-        // "331 Assassins Creed Shadows usuario senha"
-        // "331 | Assassins Creed Shadows | usuario | senha"
-        // "331 - Assassins Creed Shadows - usuario - senha"
-
-        const padroes = [
-            // Padrão: NUMERO JOGO LOGIN SENHA (espaços)
-            /^(={1,4})=\s+(.+?)\s+([\w\.@\-_]+)\s+([\w\S]+)$/,
-            // Padrão: NUMERO | JOGO | LOGIN | SENHA
-            /^(={1,4})=\s*\|\s*(.+?)\s*\|\s*([\w\.@\-_]+)\s*\|\s*([\w\S]+)$/,
-            // Padrão: NUMERO - JOGO - LOGIN - SENHA
-            /^(={1,4})=\s*-\s*(.+?)\s*-\s*([\w\.@\-_]+)\s*-\s*([\w\S]+)$/
-        ];
-
-        for (const regex of padroes) {
-            const match = linha.match(regex);
-            if (match) {
+        linha = linha.replace(/^[🔢🎮👤🔒✅❌📱\s]+/g, '').trim();
+        
+        // Tenta dividir por pipe primeiro
+        if (linha.includes('|')) {
+            const partes = linha.split('|').map(p => p.trim());
+            if (partes.length >= 4) {
                 return {
-                    numero: match[1].trim(),
-                    jogo: match[2].trim(),
-                    login: match[3].trim(),
-                    senha: match[4].trim(),
-                    categoria: this.detectarCategoria(match[2].trim())
+                    numero: partes[0],
+                    jogo: partes[1],
+                    login: partes[2],
+                    senha: partes[3],
+                    categoria: this.detectarCategoria(partes[1])
                 };
             }
         }
-
-        // Tentativa mais flexível: dividir por espaços
+        
+        // Tenta dividir por traço
+        if (linha.includes(' - ')) {
+            const partes = linha.split(' - ').map(p => p.trim());
+            if (partes.length >= 4) {
+                return {
+                    numero: partes[0],
+                    jogo: partes[1],
+                    login: partes[2],
+                    senha: partes[3],
+                    categoria: this.detectarCategoria(partes[1])
+                };
+            }
+        }
+        
+        // Divide por espaços (formato: NUMERO JOGO LOGIN SENHA)
         const partes = linha.split(/\s+/);
+        
         if (partes.length >= 4) {
             // Primeiro elemento deve ser número
             if (/^\d{1,4}$/.test(partes[0])) {
@@ -162,7 +163,7 @@ class ContasSteamParser {
                 const login = partes[partes.length - 2];
                 // Tudo entre número e login é o jogo
                 const jogo = partes.slice(1, -2).join(' ');
-
+                
                 if (numero && jogo && login && senha) {
                     return {
                         numero: numero,
@@ -189,7 +190,7 @@ class ContasSteamParser {
         return { problema: false };
     }
 
-    // Método antigo mantido para compatibilidade com arquivo TXT completo
+    // Método antigo mantido para compatibilidade
     extrairContas(conteudo) {
         const linhas = conteudo.split('\n');
         let contaAtual = null;
@@ -537,8 +538,8 @@ function getMenuAdmin() {
 1️⃣ *Adicionar Conta* ➕
 2️⃣ *Gerar Key* 🔑
 3️⃣ *Gerar Key Teste* 🎁
-4️⃣ *Importar Contas (TXT)* 📄 ⚡NOVO
-5️⃣ *Importar Múltiplas* 📋 ⚡MASSA
+4️⃣ *Importar Contas (TXT)* 📄
+5️⃣ *Importar Múltiplas* 📋
 6️⃣ *Estatísticas* 📊
 7️⃣ *Listar Jogos* 📋
 8️⃣ *Broadcast* 📢
@@ -548,6 +549,25 @@ function getMenuAdmin() {
 0️⃣ *Voltar ao Menu*`;
 }
 
+// CORRIGIDO: Cálculo de tempo mais preciso
+function calcularTempoRestante(dataExpiracao) {
+    if (!dataExpiracao) return 'N/A';
+    
+    const agora = new Date();
+    const expira = new Date(dataExpiracao);
+    const diffMs = expira - agora;
+
+    if (diffMs <= 0) return '⛔ EXPIRADO';
+
+    const dias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const horas = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutos = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (dias > 0) return `${dias}d ${horas}h ${minutos}m`;
+    if (horas > 0) return `${horas}h ${minutos}m`;
+    return `${minutos}m`;
+}
+
 function calcularTempoUso(dataRegistro) {
     if (!dataRegistro) return 'Novo usuário';
 
@@ -555,18 +575,13 @@ function calcularTempoUso(dataRegistro) {
     const registro = new Date(dataRegistro);
     const diffMs = agora - registro;
 
-    const segundos = Math.floor(diffMs / 1000);
-    const minutos = Math.floor(segundos / 60);
-    const horas = Math.floor(minutos / 60);
-    const dias = Math.floor(horas / 24);
+    const dias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const horas = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
     const meses = Math.floor(dias / 30);
-    const anos = Math.floor(dias / 365);
 
-    if (anos > 0) return `${anos} ano${anos > 1 ? 's' : ''}`;
     if (meses > 0) return `${meses} mês${meses > 1 ? 'es' : ''}`;
     if (dias > 0) return `${dias} dia${dias > 1 ? 's' : ''}`;
     if (horas > 0) return `${horas} hora${horas > 1 ? 's' : ''}`;
-    if (minutos > 0) return `${minutos} minuto${minutos > 1 ? 's' : ''}`;
     return 'Agora mesmo';
 }
 
@@ -760,7 +775,6 @@ async function connectToWhatsApp() {
 
                 // ========== MENU PRINCIPAL ==========
                 if (userState.step === 'menu') {
-                    // ... (código do menu principal mantido)
                     switch(text) {
                         case '1':
                             await enviarResposta(sender, { text: `💰 *Preços:*\n\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Para comprar, fale com:\n+${ADMIN_NUMBER}` });
@@ -788,18 +802,120 @@ async function connectToWhatsApp() {
                             await enviarResposta(sender, { text: msg });
                             break;
 
+                        // CORRIGIDO: Opção 4 - Ver todos os jogos com paginação
                         case '4':
                             if (!db.verificarAcesso(sender)) {
-                                await enviarResposta(sender, { text: '❌ Precisa de key ativa!' });
+                                await enviarResposta(sender, { text: '❌ Precisa de key ativa! Digite 2 ou 6' });
                                 return;
                             }
-                            const listaJogos = db.getTodosJogosDisponiveis();
-                            await enviarResposta(sender, { text: `📋 *Total: ${listaJogos.length} jogos*\n\nUse opção 3 para buscar.` });
+                            
+                            const todosJogos = db.getTodosJogosDisponiveis();
+                            
+                            if (todosJogos.length === 0) {
+                                await enviarResposta(sender, { text: '📋 *Nenhum jogo cadastrado ainda.*' });
+                                return;
+                            }
+                            
+                            // Divide em páginas de 20 jogos
+                            const jogosPorPagina = 20;
+                            const totalPaginas = Math.ceil(todosJogos.length / jogosPorPagina);
+                            
+                            let msgLista = `📋 *TODOS OS JOGOS DISPONÍVEIS*\n\n`;
+                            msgLista += `🎮 Total: ${todosJogos.length} jogos\n`;
+                            msgLista += `📄 Página 1/${totalPaginas}\n\n`;
+                            
+                            const jogosPagina = todosJogos.slice(0, jogosPorPagina);
+                            
+                            jogosPagina.forEach((jogo, index) => {
+                                msgLista += `${index + 1}. *${jogo.jogo}*\n`;
+                                msgLista += `   📂 ${jogo.categoria}\n`;
+                                msgLista += `   👤 ${jogo.login}\n\n`;
+                            });
+                            
+                            if (totalPaginas > 1) {
+                                msgLista += `\n📄 Digite *mais* para ver mais jogos\n`;
+                            }
+                            
+                            msgLista += `\n🔍 Para buscar um jogo específico, digite o nome`;
+                            
+                            // Salva estado com paginação
+                            userStates.set(sender, { 
+                                step: 'ver_jogos_pagina', 
+                                paginaAtual: 1,
+                                totalPaginas: totalPaginas,
+                                todosJogos: todosJogos
+                            });
+                            
+                            await enviarResposta(sender, { text: msgLista });
                             break;
 
+                        // CORRIGIDO: Opção 5 - Meu Perfil completo
                         case '5':
                             const p = db.getPerfil(sender);
-                            await enviarResposta(sender, { text: `👤 *Perfil*\n\nStatus: ${p.temAcesso ? '✅ Ativo' : '❌ Inativo'}\nKeys: ${p.keysResgatadas?.length || 0}` });
+                            const numLimpo = sender.split('@')[0];
+                            
+                            // Calcula tempo de uso
+                            const tempoUso = calcularTempoUso(p.dataRegistro);
+                            
+                            // Calcula tempo restante do plano
+                            let tempoRestante = '⛔ Sem plano ativo';
+                            let expiraEm = 'N/A';
+                            
+                            if (p.temAcesso && p.keyInfo) {
+                                tempoRestante = calcularTempoRestante(p.keyInfo.dataExpiracao);
+                                expiraEm = p.keyInfo.expira || 'N/A';
+                            }
+                            
+                            // Conta jogos resgatados (contas que o usuário pegou)
+                            const jogosResgatados = p.jogosResgatados ? p.jogosResgatados.length : 0;
+                            
+                            // Conta keys resgatadas
+                            const keysResgatadas = p.keysResgatadas ? p.keysResgatadas.length : 0;
+                            
+                            // Verifica se é teste ou plano pago
+                            let tipoPlano = '❌ Sem acesso';
+                            if (p.temAcesso) {
+                                if (p.acessoPermanente) {
+                                    tipoPlano = '👑 ADMIN LIFETIME';
+                                } else if (p.keyInfo && p.keyInfo.plano) {
+                                    tipoPlano = `✅ ${p.keyInfo.plano.toUpperCase()}`;
+                                } else {
+                                    tipoPlano = '✅ ATIVO';
+                                }
+                            } else if (p.usouTeste) {
+                                tipoPlano = '⛔ TESTE EXPIRADO';
+                            }
+                            
+                            let msgPerfil = `👤 *MEU PERFIL*\n\n`;
+                            msgPerfil += `🪪 *Nome:* ${p.nome || pushName}\n`;
+                            msgPerfil += `📱 *Número:* ${numLimpo}\n\n`;
+                            
+                            msgPerfil += `⏱️ *Status do Plano:*\n`;
+                            msgPerfil += `${tipoPlano}\n`;
+                            
+                            if (p.temAcesso && p.keyInfo) {
+                                msgPerfil += `\n📅 *Expira em:* ${expiraEm}\n`;
+                                msgPerfil += `⏳ *Tempo restante:* ${tempoRestante}\n`;
+                            }
+                            
+                            msgPerfil += `\n📊 *Estatísticas:*\n`;
+                            msgPerfil += `🎮 Jogos resgatados: ${jogosResgatados}\n`;
+                            msgPerfil += `🔑 Keys resgatadas: ${keysResgatadas}\n`;
+                            msgPerfil += `📅 *Cliente há:* ${tempoUso}\n`;
+                            
+                            if (p.usouTeste && !p.temAcesso) {
+                                msgPerfil += `\n😢 *Seu teste expirou!*\n`;
+                                msgPerfil += `💰 Compre uma key para continuar:\n`;
+                                msgPerfil += `• 7 dias: R$ 10\n`;
+                                msgPerfil += `• 1 mês: R$ 25\n`;
+                                msgPerfil += `• Lifetime: R$ 80\n`;
+                            }
+                            
+                            if (p.acessoPermanente) {
+                                msgPerfil += `\n\n👑 *Você é Administrador!* 🌟`;
+                            }
+                            
+                            await enviarResposta(sender, { text: msgPerfil });
                             break;
 
                         case '6':
@@ -814,6 +930,52 @@ async function connectToWhatsApp() {
 
                         default:
                             await enviarResposta(sender, { text: getMenuPrincipal(pushName) });
+                    }
+                }
+
+                // ========== PAGINAÇÃO DE JOGOS ==========
+                else if (userState.step === 'ver_jogos_pagina') {
+                    if (text === 'mais' || text === 'proxima' || text === 'próxima') {
+                        const proximaPagina = userState.paginaAtual + 1;
+                        
+                        if (proximaPagina > userState.totalPaginas) {
+                            await enviarResposta(sender, { text: '✅ Você já viu todos os jogos!\n\nDigite *menu* para voltar.' });
+                            userStates.set(sender, { step: 'menu' });
+                            return;
+                        }
+                        
+                        const jogosPorPagina = 20;
+                        const inicio = (proximaPagina - 1) * jogosPorPagina;
+                        const fim = inicio + jogosPorPagina;
+                        const jogosPagina = userState.todosJogos.slice(inicio, fim);
+                        
+                        let msgLista = `📋 *TODOS OS JOGOS*\n\n`;
+                        msgLista += `🎮 Total: ${userState.todosJogos.length} jogos\n`;
+                        msgLista += `📄 Página ${proximaPagina}/${userState.totalPaginas}\n\n`;
+                        
+                        jogosPagina.forEach((jogo, index) => {
+                            const numReal = inicio + index + 1;
+                            msgLista += `${numReal}. *${jogo.jogo}*\n`;
+                            msgLista += `   📂 ${jogo.categoria}\n`;
+                            msgLista += `   👤 ${jogo.login}\n\n`;
+                        });
+                        
+                        if (proximaPagina < userState.totalPaginas) {
+                            msgLista += `\n📄 Digite *mais* para próxima página\n`;
+                        }
+                        msgLista += `\n🔍 Digite o nome do jogo para buscar`;
+                        
+                        userStates.set(sender, { 
+                            ...userState,
+                            step: 'ver_jogos_pagina',
+                            paginaAtual: proximaPagina
+                        });
+                        
+                        await enviarResposta(sender, { text: msgLista });
+                    } else {
+                        // Se digitou algo diferente de "mais", volta para menu ou busca
+                        userStates.set(sender, { step: 'menu' });
+                        await enviarResposta(sender, { text: getMenuPrincipal(pushName) });
                     }
                 }
 
@@ -876,8 +1038,11 @@ async function connectToWhatsApp() {
                 else if (userState.step === 'buscar_jogo') {
                     const conta = db.buscarConta(text);
                     if (conta) {
+                        // Registra que o usuário resgatou este jogo
+                        db.registrarJogoResgatado(sender, conta);
+                        
                         userStates.set(sender, { step: 'menu' });
-                        await enviarResposta(sender, { text: `🎮 *${conta.jogo}*\n\n👤 Login: ${conta.login}\n🔒 Senha: ${conta.senha}\n\n⚠️ Use modo OFFLINE!` });
+                        await enviarResposta(sender, { text: `🎮 *${conta.jogo}*\n\n👤 Login: ${conta.login}\n🔒 Senha: ${conta.senha}\n📂 Categoria: ${conta.categoria}\n\n⚠️ Use modo OFFLINE!` });
                     } else {
                         await enviarResposta(sender, { text: `❌ Jogo não encontrado.` });
                     }
@@ -906,26 +1071,10 @@ async function connectToWhatsApp() {
                             await enviarResposta(sender, { text: '📄 *Importar arquivo TXT*\n\nEnvie o arquivo ou digite AUTO' });
                             break;
 
-                        // ========== NOVO: IMPORTAR MÚLTIPLAS CONTAS ==========
                         case '5':
                             userStates.set(sender, { step: 'admin_importar_multiplas' });
                             await enviarResposta(sender, { 
-                                text: `📋 *IMPORTAR MÚLTIPLAS CONTAS*
-
-Cole as contas no formato:
-
-*NUMERO JOGO LOGIN SENHA*
-
-Exemplo:
-\`\`\`
-331 Assassins Creed Shadows usuario1 senha123
-332 Black Myth Wukong usuario2 senha456
-333 Farming Simulator usuario3 senha789
-\`\`\`
-
-⚡ O bot vai separar automaticamente!
-
-Digite as contas agora:` 
+                                text: `📋 *IMPORTAR MÚLTIPLAS CONTAS*\n\nCole as contas no formato:\n\n*NUMERO JOGO LOGIN SENHA*\n\nExemplo:\n\`\`\`\n331 Assassins Creed Shadows usuario1 senha123\n332 Black Myth Wukong usuario2 senha456\n333 Farming Simulator usuario3 senha789\n\`\`\`\n\n⚡ O bot vai separar automaticamente!\n\nDigite as contas agora:` 
                             });
                             break;
 
@@ -964,7 +1113,7 @@ Digite as contas agora:`
                     }
                 }
 
-                // ========== ADMIN: IMPORTAR MÚLTIPLAS CONTAS (NOVO) ==========
+                // ========== ADMIN: IMPORTAR MÚLTIPLAS CONTAS ==========
                 else if (userState.step === 'admin_importar_multiplas' && isAdmin) {
                     const parser = new ContasSteamParser();
                     const resultado = parser.processarMultiplasContas(textOriginal);
