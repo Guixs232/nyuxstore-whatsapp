@@ -1,64 +1,24 @@
-import { 
-    default as makeWASocket, 
+const { 
+    default: makeWASocket, 
     DisconnectReason, 
     useMultiFileAuthState,
     delay,
     fetchLatestBaileysVersion 
-} from '@whiskeysockets/baileys';
-import pino from 'pino';
-import qrcode from 'qrcode-terminal';
-import Database from './database.js';
-import moment from 'moment';
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const qrcode = require('qrcode-terminal');
+const Database = require('./database');
+const moment = require('moment');
 
 // Configurações
-const ADMIN_NUMBER = '5518997972598';
 const BOT_NUMBER = '556183040115';
+const ADMIN_NUMBER = '5518997972598';
 const STORE_NAME = 'NyuxStore';
 
 const db = new Database();
+
+// Estados dos usuários
 const userStates = new Map();
-
-// Detectar categoria automaticamente
-function detectarCategoria(nomeJogo) {
-    const jogo = nomeJogo.toLowerCase();
-    
-    // Corrida
-    if (/forza|need for speed|nfs|f1|formula 1|grid|dirt|rally|crew|horizon|trackmania|beamng|assetto|iracing|project cars|wreckfest|hot wheels|burnout|midnight club|test drive|flatout|motorstorm|driveclub|the crew|forza horizon|forza motorsport|gran turismo|gt sport|gt7|wrc|v-rally|colin mcrae|sebastien loeb|dirt rally|f1 202|f1 2023|f1 2024|f1 22|f1 23|f1 24|automobilista|race|speed|corrida|car|moto|moto gp|ride| TT| Tourist Trophy| motogp/.test(jogo)) return '🏎️ Corrida';
-    
-    // FPS/Tiro
-    if (/call of duty|cod|cod mw|cod bo|modern warfare|black ops|warzone|cold war|vanguard|mw2|mw3|bo2|bo3|bo4|csgo|cs 2|counter strike|valorant|apex|apex legends|fortnite|pubg|battlefield|bf1|bf4|bf5|bf2042|hardline|titanfall|overwatch|rainbow six|siege|destiny|halo|gears of war|doom|wolfenstein|borderlands|far cry|crysis|metro|stalker|dayz|escape from tarkov|eft|rust|ark|battle royale|shooter|fps|tiro|arma|arma 3|arma 2|squad|hell let loose|post scriptum|enlisted|war thunder|world of tanks|wot|world of warships|crossout/.test(jogo)) return '🔫 FPS/Tiro';
-    
-    // RPG/Aventura
-    if (/elden ring|dark souls|demon souls|bloodborne|sekiro|soulslike|witcher|witcher 3|cyberpunk|skyrim|elder scrolls|oblivion|morrowind|fallout|fallout 4|fallout new vegas|mass effect|dragon age|divinity|baldur|baldur's gate|pathfinder|pillars of eternity|tyranny|outer worlds|avowed|starfield|no man's sky|subnautica|subnautica below zero|monster hunter|monster hunter world|monster hunter rise|dauntless|god of war|gow ragnarok|horizon|horizon zero dawn|horizon forbidden west|ghost of tsushima|assassin|assassin's creed|ac valhalla|ac odyssey|ac origins|ac unity|ac syndicate|ac black flag|ac revelations|ac brotherhood|ac 2|ac 3|ac mirage|red dead|rdr2|rdr 2|red dead redemption|red dead online|gta 5|gta v|gta online|watch dogs|legion|watch dogs 2|wd2|saints row|mafia|mafia 2|mafia 3|mafia definitive|sleeping dogs|true crime|yakuza|like a dragon|judgment|lost judgment|final fantasy|ff7|ff14|ffxiv|ff16|chrono trigger|chrono cross|dragon quest|dq11|dq 11|ni no kuni|tales of|tales of arise|persona|persona 5|p5|p5r|persona 4|p4g|persona 3|p3p|shin megami tensei|smt|soul hackers|metaphor|refantazio|star ocean|valkyrie profile|valkyria chronicles|atelier|ys|trails of cold steel|trails in the sky|legend of heroes|disgaea|la pucelle|phantom brave|soul nomad|z.hp|guided fate paradox|the witch and the hundred knight|revue starlight|sakura wars|sakura taisen|sakura wars|sakura taisen|sakura/.test(jogo)) return '⚔️ RPG/Aventura';
-    
-    // Terror
-    if (/resident evil|re2|re3|re4|re5|re6|re7|re8|re village|biohazard|silent hill|sh2|sh3|sh4|silent hill 2|silent hill 3|dead space|ds1|ds2|ds3|dead space remake|alien isolation|outlast|outlast 2|amnesia|soma|layers of fear|blair witch|evil within|evil within 2|the evil within|darkwood|dont starve|dont starve together|little nightmares|ln1|ln2|little nightmares 2|inside|limbo|scorn|agony|madison|visage|phasmophobia|devour|pacify|lunch lady|forewarned|ghost watchers|ghost exorcism|demonologist|ghost hunters|paranormal|horror|terror|fear|slender|five nights at freddy's|fnaf|fnaf security breach|fnaf help wanted|bendy|batim|bendy and the ink machine|dark deception|boogeyman|visage|infliction|those who remain|tormented souls|song of horror|remothered|remothered tormented fathers|remothered broken porcelain|the medium|observer|observer system redux|callisto protocol|dead island|dying light|dying light 2|state of decay|days gone|world war z|back 4 blood|left 4 dead|l4d|l4d2|zombie|undead|survival horror/.test(jogo)) return '👻 Terror';
-    
-    // Esportes
-    if (/fifa|fifa 23|fifa 24|ea fc|eafc|fc 24|fc 25|pes|efootball|winning eleven|pro evolution soccer|nba|nba 2k|nba 2k24|nba 2k23|wwe|wwe 2k|ufc|ufc 4|ufc 5|mma|bellator|boxing|fight night|fight night champion|undisputed|tony hawk|skate|skate 3|session|skater xl|riders republic|steep|ssx|cool boarders|nfl|madden|madden nfl|nhl|nhl 24|nhl 23|f1 manager|football manager|fm 24|fm 23|fm 2024|out of the park|ootp|mlb the show|mlb|baseball|golf|pga tour|pga 2k|everybody's golf|mario golf|mario tennis|mario strikers|mario sports|wii sports|nintendo switch sports|sports champions|kinect sports|ea sports|2k sports|sports/.test(jogo)) return '⚽ Esportes';
-    
-    // Simulador
-    if (/simulator|simulation|sim|tycoon|tycoon|manager|management|city builder|cities skylines|city skylines|simcity|cities xl|citybound|foundation|surviving mars|surviving the aftermath|frostpunk|frostpunk 2|anno|anno 1800|anno 1404|anno 2070|anno 2205|settlers|the settlers|banished|patron|farthest frontier|going medieval|foundation|kingdoms reborn|before we leave|ixion|dyson sphere program|factorio|satisfactory|shapez|shapez 2|autonauts|infinifactory|while true learn|human resource machine|7 billion humans| Shenzhen I/O|TIS-100|exapunks|mobius front|opus magnum|infinifactory|spacechem|train valley|train valley 2|mini metro|mini motorways|manifold garden|baba is you|the witness|antichamber|portal|portal 2|the talos principle|the turing test|q.u.b.e|superliminal|viewfinder|maquette|the bridge|braid|fez|monument valley|monument valley 2|gorogoa|manifold garden|outer wilds|heaven's vault|journey|abzu|flower|sky|thatgamecompany|a short hike|firewatch|dear esther|everybody's gone to the rapture|vanishing of ethan carter|what remains of edith finch|gone home|tacoma|observer|layers of fear|blair witch|the medium|twelve minutes|her story|telling lies|immortality|sam barlow|bandersnatch|black mirror|not for broadcast|headliner|headliner novinews|beholder|papers please|this war of mine|frostpunk|frostpunk 2|they are billions|age of darkness|the riftbreaker|riftbreaker|starcraft|starcraft 2|warcraft|warcraft 3|age of empires|aoe|aoe2|aoe3|aoe4|empire earth|rise of nations|rise of legends|supreme commander|total annihilation|planetary annihilation|ashes of the singularity|dawn of war|dow|dow2|dow3|company of heroes|coh|coh2|coh3|men of war|gates of hell|combat mission|close combat|combat mission|graviteam tactics|theatre of war|panzer corps|panzer strategy|unity of command|unity of command 2|wargame|wargame red dragon|wargame airland battle|warno|regiments|armored brigade|armored brigade 2|flashpoint campaigns|command ops|decisive campaigns|war in the east|war in the west|gary grigsby|panzerkampf|tiger knight|chivalry|chivalry 2|mordhau|for honor|mount and blade|bannerlord|warband|viking conquest|prophesy of pendor|perisno|gekokujo|nova aetas|1257 ad|brytenwalda|a clash of kings|game of thrones|lotr|lord of the rings|last days|third age|divide and conquer|eldar scrolls|tamriel|skyrim together|enderal|vigilant|glenmoril|unsaad|apotheosis|legacy of the dragonborn|lotd|falskaar|wyrmstooth|beyond reach|bruma|beyond skyrim|skyblivion|skywind|morroblivion|tes renewal|openmw|openmw|morrowind|daggerfall|arena|redguard|battlespire|shadowkey|oblivion mobile|oblivion|skyrim|eso|elder scrolls online|fallout 76|fallout 4|fallout new vegas|fallout 3|fallout 2|fallout 1|fallout tactics|fallout brotherhood of steel|van buren|project brazil|the frontier|fallout miami|fallout london|fallout nuka break|fallout|apocalypse|post apocalyptic|wasteland|wasteland 2|wasteland 3|atom rpg|atom|pathologic|pathologic 2|ice pick lodge|knock knock|cargo|the void|turgor|tension|mor|ur|pathologic|marble nest|the sand plague|haruspex|changeling|bachelor|pathologic|metro|metro 2033|metro last light|metro exodus|metro 2033 redux|metro last light redux|metro exodus enhanced|s.t.a.l.k.e.r|stalker|shadow of chernobyl|clear sky|call of pripyat|heart of chornobyl|stalker 2|gsc game world|chernobyl|pripyat|zone|anomaly|dead air|gamma|efp|escape from pripyat|road to the north|spatial anomaly|deadcity|agroprom|rostock|bar|100 rads|sidorovich|strelok|degtyarev|skif|s.t.a.l.k.e.r|survival|survive|surviving|green hell|the forest|sons of the forest|raft|subnautica|subnautica below zero|the long dark|dont starve|dont starve together|oxygen not included|oni|rimworld|dwarf fortress|dwarf therapist|stonesense|dfhack|lazy newb pack|peridexiserrant|kruggsmash|boatmurdered|bronzemurdered|headshoots|syndrome|elephant|cats|magma|circus|clown|goblin|kobold|elf|human|dwarf|fortress|embark|biome|cavern|hell|hfs|hidden fun stuff|adamantine|raws|modding|dfhack|therapist|stonesense|sound sense|soundsense|soundcense|armok|armok vision|dwarf fortress|bay 12|tarn adams|zach adams|toady one|three toed sloth|threetoed|kitfox|steam|classic|premium|adventure|fortress mode|legends|arena|object testing arena|ota|modding|mods|graphics|ascii|tileset|phoebus|ironhand|spacefox|gemset|obsidian|mayday|jolly bastion|taffer|vherid|wanderlust|cla|dfgraphics|peridexis|peridexis errant|lazy newb pack|lnp|starter pack|quickfort|dfhack|therapist|stonesense|armok vision|dwarf therapist|sound sense|df to minecraft|df to rimworld|rimworld to df|df to gnomoria|gnomoria|craft the world|dig or die|it lurks below|starbound|terraria|edge of space|signs of life|planet centauri|crea|junk jack|junk jack x|pickaxe|mine|craft|build|explore|adventure|survival|creative|sandbox|open world|procedural|generated|random|seed|worldgen|world generation|history|legends|histories|entities|civilizations|sites|structures|artifacts|books|written content|poetry|music|dance|forms|styles|instruments|musical instruments|compositions|engravings|sculptures|statues|furniture|mechanisms|engineering|water|magma|power|windmill|water wheel|reaction|smelting|forging|metal|alloy|steel|iron|gold|silver|copper|bronze|brass|electrum|billon|sterling silver|rose gold|black bronze|bismuth bronze|adamantine|divine metal|slade|raw adamantine|wafer|strand|thread|cloth|silk|plant fiber|cotton|wool|yarn|leather|hide|bone|shell|horn|ivory|pearl|coral|amber|jet|coal|lignite|bituminous coal|coke|charcoal|fuel|fire|magma|volcano|geyser|hot spring|aquifer|river|stream|brook|pond|lake|ocean|sea|shore|beach|sand|clay|soil|loam|silt|sand|clay|peat|mud|filth|contaminant|syndrome|poison|toxin|venom|curse|werebeast|vampire|necromancer|zombie|husk|thrall|night creature|experiment|abomination|forgotten beast|titan|demon|angel|deity|god|goddess|sphere|domain|afterlife|underworld|heaven|hell|hfs|hidden fun stuff|circus|clown|demon|angel|forgotten beast|titan|dragon|roc|hydra|minotaur|cyclops|ettin|giant|jotun|nephilim|angel|demon|sphire|domain|afterlife|underworld|heaven|hell|circus|clown|fun|hidden|secret|spoilers|bay 12|tarn|zach|toady|sloth|three toed|kitfox|steam|classic|premium|release|update|bugfix|patch|version|changelog|devlog|dev|development|sneak peek|future of the fortress| FotF|dwarf fortress talk|DF Talk|podcast|interview|community|forums|bay12forums|reddit|r/dwarffortress|discord|wiki|dffd|dwarf fortress file depot|meph|vettlingr|mayday|phoebus|ironhand|spacefox|gemset|obsidian|cla|dfgraphics|peridexis|lnp|lazy newb|starter pack|quickfort|dfhack|therapist|stonesense|armok vision|sound sense|df to minecraft|df to rimworld|gnomoria|craft the world|dig or die|it lurks below|starbound|terraria|edge of space|signs of life|planet centauri|crea|junk jack|pickaxe|mine|craft|build|explore|adventure|survival|creative|sandbox|open world|procedural|generated|random|seed|worldgen|history|legends|histories|entities|civilizations|sites|structures|artifacts|books|written content|poetry|music|dance|forms|styles|instruments|musical instruments|compositions|engravings|sculptures|statues|furniture|mechanisms|engineering|water|magma|power|windmill|water wheel|reaction|smelting|forging|metal|alloy|fuel|fire|volcano|geyser|hot spring|aquifer|river|stream|brook|pond|lake|ocean|sea|shore|beach|sand|clay|soil|peat|mud|filth|contaminant|syndrome|poison|toxin|venom|curse|werebeast|vampire|necromancer|zombie|husk|thrall|night creature|experiment|abomination|forgotten beast|titan|demon|angel|deity|god|goddess|sphere|domain|afterlife|underworld|heaven|hell|circus|clown|dragon|roc|hydra|minotaur|cyclops|ettin|giant|jotun|nephilim|spoilers|bay 12|tarn|zach|toady|sloth|kitfox|steam|classic|premium|release|update|bugfix|patch|version|changelog|devlog|dev|development|sneak peek|future of the fortress|FotF|dwarf fortress talk|DF Talk|podcast|interview|community|forums|bay12forums|reddit|r/dwarffortress|discord|wiki|dffd|dwarf fortress file depot|meph|vettlingr|mayday|phoebus|ironhand|spacefox|gemset|obsidian|cla|dfgraphics|peridexis|lnp|lazy newb|starter pack|quickfort|dfhack|therapist|stonesense|armok vision|sound sense|df to minecraft|df to rimworld|gnomoria|craft the world|dig or die|it lurks below|starbound|terraria|edge of space|signs of life|planet centauri|crea|junk jack|pickaxe|mine|craft|build|explore|adventure|survival|creative|sandbox|open world|procedural|generated|random|seed|worldgen/.test(jogo)) return '🏗️ Simulador';
-    
-    // Casual/Família
-    if (/lego|minecraft|roblox|animal crossing|acnh|new horizons|stardew valley|harvest moon|story of seasons|rune factory|sakuna|sakuna of rice and ruin|spiritfarer|cozy grove|a short hike|unpacking|powerwash simulator|power wash|powerwash|chill|relax|cozy|wholesome|wholesome games|family friendly|kids|children|educational|learning|math|science|history|geography|puzzle|puzzles|tetris|puyo puyo|panel de pon|tetris effect|tetris 99|puyo puyo tetris|dr mario|yoshi|yoshi's crafted world|yoshi's woolly world|kirby|kirby and the forgotten land|kirby star allies|kirby triple deluxe|kirby planet robobot|super kirby clash|kirby fighters|kirby's dream buffet|kirby's return to dream land|super mario|mario bros|mario 3d|mario odyssey|mario galaxy|mario sunshine|mario 64|super mario 64|mario kart|mario party|super mario party|mario party superstars|paper mario|mario rpg|mario luigi|mario and luigi|mario tennis|mario golf|mario strikers|mario baseball|mario sports|donkey kong|dk|dk country|donkey kong country|dkc|dkc2|dkc3|dk 64|donkey kong 64|dk tropical freeze|donkey kong tropical freeze|dk returns|donkey kong returns|diddy kong|dixie kong|king k rool|k rool|cranky kong|funky kong|wrinkly kong|swanky kong|candy kong|chunky kong|lanky kong|tiny kong|kiddy kong|koopa|bowser|peach|daisy|rosalina|luma|toad|toadette|yoshi|birdo|wario|waluigi|boo|goomba|koopa troopa|paratroopa|dry bones|hammer bro|lakitu|spiny|buzzy beetle|cheep cheep|bloop|blooper|piranha plant|bullet bill|bob-omb|chain chomp|thwomp|whomp|monty mole|pokey|shy guy|snifit|ninja|bandit|broozer|bully|chuckya|cluckboom|cozmo|crabber|cyclone|diggas|drill bit|elite octoomba|flipbug|flutter|fuzzy|glamdozer|gooble|goombeetle|gromba|jack o goomba|jammyfish|jellybeam|jump beamer|kat o 3|king kaliente|koopa ball|koopa shell|lakitu king|lava bubble|li'l brr|li'l cinder|magikoopa|mandibug|mechakoopa|monty|octoguy|octoomba|octopus|paragoomba|pinhead|piranha|prickly piranha|rhomp|sentry beam|slurple|smeech|snake block|swooper|twirlip|undergrunt|wiggler/.test(jogo)) return '🎮 Casual/Família';
-    
-    // Mundo Aberto/Ação
-    if (/gta|grand theft auto|gta 5|gta v|gta online|gta 6|gta vi|red dead|rdr2|rdr 2|red dead redemption|red dead online|watch dogs|wd|wd2|wd legion|watch dogs 2|watch dogs legion|saints row|saints row 2022|mafia|mafia 2|mafia 3|mafia definitive|sleeping dogs|true crime|yakuza|like a dragon|judgment|lost judgment|just cause|jc2|jc3|jc4|just cause 2|just cause 3|just cause 4|mad max|rage|rage 2|borderlands|borderlands 2|borderlands 3|tales from the borderlands|wonderlands|tiny tina|tiny tina's wonderlands|outer worlds|avowed|starfield|no man's sky|subnautica|subnautica below zero|satisfactory|dyson sphere program|factorio|satisfactory|shapez|shapez 2|autonauts|infinifactory|while true learn|human resource machine|7 billion humans| Shenzhen I/O|TIS-100|exapunks|mobius front|opus magnum|infinifactory|spacechem|astroneer|breathedge|junkyard simulator|gas station simulator|car mechanic simulator|cms|cms 2021|cms 2018|truck driver|truck simulator|american truck simulator|ats|euro truck simulator|ets|ets2|farm simulator|farming simulator|fs|fs19|fs22|fs 2019|fs 2022|pure farming|real farm|farm manager|farm together|staxel|my time at portia|my time at sandrock|littlewood|forager|garden story|wytchwood|apico|bear and breakfast|cozy grove|spiritfarer|unpacking|powerwash simulator|power wash|powerwash|chill|relax|cozy|wholesome/.test(jogo)) return '🚔 Mundo Aberto/Ação';
-    
-    // Estratégia
-    if (/strategy|strategia|xcom|x-com|xcom 2|xcom chimera|phoenix point|battletech|into the breach|fTL|faster than light|slay the spire|monster train|griftlands|roguebook|across the obelisk|tainted grail|hand of fate|hand of fate 2|dicey dungeons|ring of pain|nowhere prophet|neoverse|one step from eden|deck builder|deckbuilding|card game|card battler|auto battler|teamfight tactics|tft|underlords|dota underlords|autochess|chess|strategy|tactics|tactical|turn based|turn-based|real time|rts|starcraft|starcraft 2|warcraft|warcraft 3|age of empires|aoe|aoe2|aoe3|aoe4|empire earth|rise of nations|rise of legends|supreme commander|total annihilation|planetary annihilation|ashes of the singularity|dawn of war|dow|dow2|dow3|company of heroes|coh|coh2|coh3|men of war|gates of hell|combat mission|close combat|graviteam tactics|theatre of war|panzer corps|panzer strategy|unity of command|unity of command 2|wargame|wargame red dragon|wargame airland battle|warno|regiments|armored brigade|armored brigade 2|flashpoint campaigns|command ops|decisive campaigns|war in the east|war in the west|gary grigsby|panzerkampf|tiger knight|chivalry|chivalry 2|mordhau|for honor|mount and blade|bannerlord|warband|crusader kings|ck2|ck3|europa universalis|eu4|hearts of iron|hoi4|hoi3|stellaris|imperator|victoria|vic2|vic3|total war|shogun|rome|medieval|napoleon|empire|attila|thrones of britannia|three kingdoms|troy|warhammer|warhammer 2|warhammer 3|pharaoh|dynasties|civilization|civ|civ5|civ6|civ4|civ3|civ2|civ1|alpha centauri|beyond earth|humankind|old world|oldworld|old world|oldworld|old world|oldworld|old world|frostpunk|frostpunk 2|they are billions|age of darkness|the riftbreaker|riftbreaker|iron harvest|desperados|shadow tactics|shadow gambit|commandos|commandos 2|commandos 3|commandos strike force|real time tactics|rtt|stealth|stealth strategy|stealth tactics|ninja|shinobi|assassin|thief|dishonored|dishonored 2|death of the outsider|prey|prey 2017|system shock|system shock 2|system shock remake|bioshock|bioshock 2|bioshock infinite|burial at sea|minerva's den|clash in the clouds| Columbia's Finest|industrial revolution| BioShock Infinite: The Complete Edition|remastered|collection|the bioshock collection|irrational games|ken levine|2k marin|2k australia|digital extremes|arkane studios|lyon|austin|prey|deathloop|death loop|redfall|red fall|dishonored|dishonored 2|death of the outsider|prey|prey 2017|system shock|system shock 2|system shock remake|bioshock|bioshock 2|bioshock infinite|burial at sea|minerva's den|clash in the clouds| Columbia's Finest|industrial revolution| BioShock Infinite: The Complete Edition|remastered|collection|the bioshock collection|irrational games|ken levine|2k marin|2k australia|digital extremes|arkane studios|lyon|austin|prey|deathloop|death loop|redfall|red fall/.test(jogo)) return '🧠 Estratégia';
-    
-    return '🎯 Ação/Aventura';
-}
-
-// Gerar Key
-function gerarKey() {
-    const prefixo = 'NYUX';
-    const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const sufixo = Math.random().toString(36).substring(2, 10).toUpperCase();
-    return `${prefixo}-${meio}-${sufixo}`;
-}
 
 // Menu Principal
 function getMenuPrincipal(nome) {
@@ -74,10 +34,37 @@ Olá, ${nome}! 👋
 3️⃣ *Buscar Jogo* 🔍
 4️⃣ *Ver Jogos* 📋
 5️⃣ *Meu Perfil* 👤
+6️⃣ *Key Teste Grátis* 🎉
 
 0️⃣ *Falar com Atendente* 💬
 
-_Digite o número da opção_`;
+_Digite o número da opção desejada_
+`;
+}
+
+// Menu quando teste expirou
+function getMenuTesteExpirado(nome) {
+    return `
+😢 *${STORE_NAME} - Teste Expirado*
+
+Ei ${nome}, seu teste grátis acabou!
+
+Quer continuar jogando? 🎮
+
+*Escolha uma opção:*
+
+1️⃣ *Comprar Key* 💳
+   • 7 dias: R$ 10
+   • 1 mês: R$ 25
+   • Lifetime: R$ 80
+
+2️⃣ *Falar com Admin* 👑
+   Chamar no privado para comprar
+
+0️⃣ *Falar com Atendente* 💬
+
+_Digite o número da opção desejada_
+`;
 }
 
 // Menu Admin
@@ -89,18 +76,24 @@ function getMenuAdmin() {
 
 1️⃣ *Adicionar Conta* ➕
 2️⃣ *Gerar Key* 🔑
-3️⃣ *Importar Contas (TXT)* 📁
-4️⃣ *Estatísticas* 📊
-5️⃣ *Listar Jogos* 📋
-6️⃣ *Broadcast* 📢
+3️⃣ *Gerar Key Teste* 🎁
+4️⃣ *Importar Contas (TXT)* 📄
+5️⃣ *Estatísticas* 📊
+6️⃣ *Listar Jogos* 📋
+7️⃣ *Broadcast* 📢
 
-0️⃣ *Voltar ao Menu*`;
+0️⃣ *Voltar ao Menu*
+
+_Digite o número da opção_
+`;
 }
 
 // Conectar ao WhatsApp
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const { version } = await fetchLatestBaileysVersion();
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    
+    console.log(`📱 Usando Baileys v${version.join('.')}, Latest: ${isLatest}`);
 
     const sock = makeWASocket({
         version,
@@ -118,16 +111,18 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log('📱 Escaneie o QR Code com o número: +' + BOT_NUMBER);
+            console.log('📱 Escaneie o QR Code com seu WhatsApp');
             qrcode.generate(qr, { small: true });
         }
         
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('❌ Conexão fechada. Reconectando:', shouldReconnect);
             if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
-            console.log('✅ Bot online!');
-            console.log('🤖 Número:', sock.user.id.split(':')[0]);
+            console.log('✅ Bot conectado ao WhatsApp!');
+            console.log('📱 Número:', sock.user.id.split(':')[0]);
+            console.log('🤖 Nome:', sock.user.name);
         }
     });
 
@@ -135,400 +130,653 @@ async function connectToWhatsApp() {
 
     // Processar mensagens
     sock.ev.on('messages.upsert', async (m) => {
+        console.log('📩 Nova mensagem:', m.type);
+        
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        
+        if (!msg.message || msg.key.fromMe) {
+            return;
+        }
 
         const sender = msg.key.remoteJid;
         const isGroup = sender.endsWith('@g.us');
         const pushName = msg.pushName || 'Cliente';
+        
+        console.log(`👤 De: ${pushName} (${sender})`);
+        console.log(`👥 Grupo: ${isGroup}`);
 
-        // Ignora grupos
-        if (isGroup) return;
-
-        // Extrai texto
+        // Extrai texto da mensagem
         let text = '';
-        if (msg.message.conversation) text = msg.message.conversation;
-        else if (msg.message.extendedTextMessage) text = msg.message.extendedTextMessage.text;
-        else if (msg.message.documentMessage) text = '[documento]';
-        else if (msg.message.imageMessage) text = '[imagem]';
+        
+        if (msg.message.conversation) {
+            text = msg.message.conversation;
+        } else if (msg.message.extendedTextMessage) {
+            text = msg.message.extendedTextMessage.text;
+        } else if (msg.message.buttonsResponseMessage) {
+            text = msg.message.buttonsResponseMessage.selectedButtonId;
+        } else if (msg.message.listResponseMessage) {
+            text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+        } else if (msg.message.documentMessage) {
+            text = '[documento]';
+        }
 
         text = text.toLowerCase().trim();
+        console.log(`💬 Texto: "${text}"`);
 
-        const numeroLimpo = sender.replace('@s.whatsapp.net', '');
-        const isAdmin = numeroLimpo === ADMIN_NUMBER;
+        // Verifica se é admin
+        const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us', '').replace(/\D/g, '');
+        const isAdmin = numeroLimpo === ADMIN_NUMBER.replace(/\D/g, '');
 
+        // Verifica se é cliente com teste expirado
+        const perfil = db.getPerfil(sender);
+        const testeExpirado = perfil.usouTeste && !perfil.temAcesso;
+
+        // Estado atual do usuário
         const userState = userStates.get(sender) || { step: 'menu' };
 
-        console.log(`📩 ${pushName} (${numeroLimpo}): ${text.substring(0, 30)}... | Admin: ${isAdmin}`);
-
         try {
-            // Saudações
-            if (['oi', 'ola', 'olá', 'hey', 'eai', 'eae', 'bom dia', 'boa tarde', 'boa noite', 'hi', 'hello'].includes(text)) {
-                await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
-                return;
+            // Se não reconhecer comando no menu, mostra menu apropriado
+            if (!isGroup && text !== '[documento]') {
+                const comandosValidos = ['1', '2', '3', '4', '5', '6', '0', 'menu', 'admin', 'voltar', 'oi', 'ola', 'olá', 'hey', 'eai', 'eae'];
+                
+                if (!comandosValidos.includes(text) && userState.step === 'menu') {
+                    // Se teste expirou, mostra menu especial
+                    if (testeExpirado && !isAdmin) {
+                        await sock.sendMessage(sender, {
+                            text: `Olá! 👋 Não entendi.\n\n${getMenuTesteExpirado(pushName)}`
+                        });
+                    } else {
+                        await sock.sendMessage(sender, {
+                            text: `Olá! 👋 Não entendi.\n\n${getMenuPrincipal(pushName)}`
+                        });
+                    }
+                    return;
+                }
             }
 
-            // MENU PRINCIPAL
+            // MENU PRINCIPAL OU MENU TESTE EXPIRADO
             if (userState.step === 'menu') {
-                switch(text) {
-                    case '1':
+                
+                // Se teste expirou, mostra menu especial (exceto para admin)
+                if (testeExpirado && !isAdmin) {
+                    
+                    if (text === '1' || text.includes('comprar')) {
                         await sock.sendMessage(sender, {
-                            text: `💳 *Comprar Key*\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• 1 ano: R$ 80\n• Lifetime: R$ 150\n\n📱 Chame: wa.me/${ADMIN_NUMBER}`
+                            text: `💳 *Comprar Key*\n\nPara comprar uma key, faça o pagamento via:\n\n• Pix\n• Transferência\n• Cartão\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
                         });
-                        break;
 
-                    case '2':
-                        userStates.set(sender, { step: 'resgatar_key' });
+                    } else if (text === '2' || text.includes('admin') || text.includes('falar')) {
+                        // Chama admin no privado
                         await sock.sendMessage(sender, {
-                            text: '🎁 *Resgatar Key*\n\nDigite sua key:\n_Exemplo: NYUX-AB12-CD34_'
+                            text: `👑 *Chamando Admin...*\n\nAguarde, estou te conectando com o admin!`
                         });
-                        break;
-
-                    case '3':
-                        const temAcesso = db.verificarAcesso(sender);
-                        if (!temAcesso) {
-                            await sock.sendMessage(sender, {
-                                text: '❌ *Acesso Negado*\n\nVocê precisa de uma key ativa!\n\n💡 Digite *2* para resgatar sua key.\n💳 Digite *1* para comprar.'
-                            });
-                            return;
-                        }
-                        userStates.set(sender, { step: 'buscar_jogo' });
-                        await sock.sendMessage(sender, {
-                            text: '🔍 *Buscar Jogo*\n\nDigite o nome do jogo que deseja:\n_Ex: GTA 5, Minecraft, FIFA..._'
+                        
+                        // Notifica admin
+                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                            text: `🚨 *CLIENTE QUER COMPRAR!*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: *Teste expirado, quer comprar key!*\n\n💬 Responda aqui para negociar.`
                         });
-                        break;
-
-                    case '4':
-                        // NOVO: Mostrar categorias e permitir escolher
-                        userStates.set(sender, { step: 'ver_categorias' });
-                        const cats = db.getCategoriasResumo();
-                        let msg = '📋 *Categorias de Jogos*\n\n';
-                        let num = 1;
-                        const categoriasLista = [];
                         
-                        for (const [cat, total] of Object.entries(cats)) {
-                            msg += `${num}️⃣ ${cat}: *${total} jogos*\n`;
-                            categoriasLista.push(cat);
-                            num++;
-                        }
+                        // Envia contato do cliente para o admin
+                        await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                            contacts: {
+                                displayName: pushName,
+                                contacts: [{ vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${pushName}\nTEL;waid=${numeroLimpo}:+${numeroLimpo}\nEND:VCARD` }]
+                            }
+                        });
                         
-                        userStates.set(sender, { step: 'ver_categorias', categorias: categoriasLista });
-                        
-                        msg += `\n🎮 *Total: ${db.getTotalJogos()} jogos*\n\nDigite o número da categoria para ver os jogos:`;
-                        await sock.sendMessage(sender, { text: msg });
-                        break;
-
-                    case '5':
-                        const perfil = db.getPerfil(sender);
-                        let perfilMsg = '👤 *Seu Perfil*\n\n';
-                        perfilMsg += `📱 Número: ${numeroLimpo}\n`;
-                        perfilMsg += `⏰ Acesso: ${perfil.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
-                        if (perfil.keyInfo) {
-                            perfilMsg += `🔑 Key: ${perfil.keyInfo.key}\n`;
-                            perfilMsg += `📅 Expira: ${perfil.keyInfo.expira}\n`;
-                        }
-                        perfilMsg += `🎮 Jogos resgatados: ${perfil.totalResgatados}\n\n`;
-                        perfilMsg += `_Digite *menu* para voltar_`;
-                        await sock.sendMessage(sender, { text: perfilMsg });
-                        break;
-
-                    case '0':
                         await sock.sendMessage(sender, {
-                            text: `💬 *Falar com Atendente*\n\nAguarde um momento...\n\nOu chame direto: wa.me/${ADMIN_NUMBER}`
+                            text: `✅ *Admin notificado!*\n\nO admin foi avisado e vai te chamar em breve.\n\nEnquanto isso, pode mandar mensagem direto:\n👤 +${ADMIN_NUMBER}`
+                        });
+
+                    } else if (text === '0' || text.includes('atendente')) {
+                        await sock.sendMessage(sender, {
+                            text: `💬 *Falar com Atendente*\n\nAguarde um momento...\n\nOu chame direto: +${ADMIN_NUMBER}`
                         });
                         await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
-                            text: `📞 *Novo Atendimento*\n\n👤 Nome: ${pushName}\n📱 Número: ${numeroLimpo}\n💬 Mensagem: ${text}\n\nO cliente está aguardando no bot.`
+                            text: `📩 *Novo Atendimento*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\nStatus: *Teste expirado*\n\nEstá aguardando atendimento.`
                         });
-                        break;
 
-                    case 'admin':
-                    case 'adm':
-                        if (!isAdmin) {
-                            await sock.sendMessage(sender, { 
-                                text: '❌ *Acesso negado!*\n\nEste comando é apenas para administradores.\n\n_Digite *menu* para ver suas opções._' 
-                            });
-                            return;
-                        }
-                        userStates.set(sender, { step: 'admin_menu' });
-                        await sock.sendMessage(sender, { text: getMenuAdmin() });
-                        break;
+                    } else if (['oi', 'ola', 'olá', 'hey', 'eai', 'eae', 'menu', 'voltar'].includes(text)) {
+                        await sock.sendMessage(sender, { 
+                            text: getMenuTesteExpirado(pushName)
+                        });
 
-                    default:
-                        await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
-                }
-            }
-
-            // NOVO: Ver jogos por categoria (sem login/senha)
-            else if (userState.step === 'ver_categorias') {
-                const escolha = parseInt(text);
-                const categorias = userState.categorias || [];
-                
-                if (isNaN(escolha) || escolha < 1 || escolha > categorias.length) {
-                    await sock.sendMessage(sender, { 
-                        text: '❌ Opção inválida!\n\nDigite um número válido ou *menu* para voltar:' 
-                    });
-                    return;
-                }
-                
-                const categoriaEscolhida = categorias[escolha - 1];
-                const jogos = db.getJogosPorCategoria(categoriaEscolhida);
-                
-                let msg = `📋 *${categoriaEscolhida}*\n\n`;
-                msg += `Total: ${jogos.length} jogos\n\n`;
-                
-                // Lista os jogos (apenas nomes, sem login/senha)
-                for (let i = 0; i < jogos.length; i++) {
-                    msg += `• ${jogos[i]}\n`;
-                    
-                    // Divide em várias mensagens se for muito grande
-                    if ((i + 1) % 50 === 0 && i < jogos.length - 1) {
-                        await sock.sendMessage(sender, { text: msg });
-                        msg = `📋 *${categoriaEscolhida}* (continuação)\n\n`;
-                        await delay(1000);
+                    } else {
+                        await sock.sendMessage(sender, { 
+                            text: getMenuTesteExpirado(pushName)
+                        });
                     }
+                    
+                    return; // Sai aqui para não executar o menu normal
                 }
-                
-                msg += `\n💡 Para resgatar uma conta, digite *3* no menu principal.`;
-                
-                userStates.set(sender, { step: 'menu' });
-                await sock.sendMessage(sender, { text: msg });
+
+                // MENU NORMAL (quem tem acesso ou nunca usou teste)
+                if (text === '1' || text.includes('comprar')) {
+                    await sock.sendMessage(sender, {
+                        text: `💳 *Comprar Key*\n\nPara comprar uma key, faça o pagamento via:\n\n• Pix\n• Transferência\n• Cartão\n\n💰 *Valores:*\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +${ADMIN_NUMBER}`
+                    });
+
+                } else if (text === '2' || text.includes('resgatar')) {
+                    userStates.set(sender, { step: 'resgatar_key' });
+                    await sock.sendMessage(sender, {
+                        text: '🎁 *Resgatar Key*\n\nDigite sua key no formato:\nNYUX-XXXX-XXXX\n\n_Exemplo: NYUX-AB12-CD34_'
+                    });
+
+                } else if (text === '3' || text.includes('buscar')) {
+                    const temAcesso = db.verificarAcesso(sender);
+                    if (!temAcesso) {
+                        await sock.sendMessage(sender, {
+                            text: '❌ *Acesso Negado*\n\nVocê precisa de uma key ativa!\n\nDigite *2* para resgatar sua key ou *6* para teste grátis.'
+                        });
+                        return;
+                    }
+                    
+                    // Mostra lista de jogos disponíveis por categoria primeiro
+                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
+                    let msg = '🎮 *Jogos Disponíveis*\n\n';
+                    
+                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria)) {
+                        msg += `${categoria}\n`;
+                        jogos.forEach((jogo, index) => {
+                            msg += `${index + 1}. ${jogo.jogo}\n`;
+                        });
+                        msg += '\n';
+                    }
+                    
+                    msg += '🔍 *Digite o nome do jogo que deseja:*\n\n_Exemplo: GTA 5, Minecraft, FIFA..._';
+                    
+                    userStates.set(sender, { step: 'buscar_jogo' });
+                    await sock.sendMessage(sender, { text: msg });
+
+                } else if (text === '4' || text.includes('jogos') || text.includes('lista')) {
+                    const temAcesso = db.verificarAcesso(sender);
+                    if (!temAcesso) {
+                        await sock.sendMessage(sender, {
+                            text: '❌ *Acesso Negado*\n\nVocê precisa de uma key ativa!\n\nDigite *2* para resgatar sua key ou *6* para teste grátis.'
+                        });
+                        return;
+                    }
+                    
+                    const jogosPorCategoria = db.getJogosDisponiveisPorCategoria();
+                    let msg = '📋 *Lista de Jogos Disponíveis*\n\n';
+                    
+                    let totalJogos = 0;
+                    for (const [categoria, jogos] of Object.entries(jogosPorCategoria)) {
+                        msg += `${categoria} (${jogos.length} jogos)\n`;
+                        jogos.forEach((jogo, index) => {
+                            msg += `  ${index + 1}. ${jogo.jogo}\n`;
+                            totalJogos++;
+                        });
+                        msg += '\n';
+                    }
+                    
+                    msg += `🎮 *Total: ${totalJogos} jogos disponíveis*\n\n`;
+                    msg += '💡 Para resgatar uma conta, use a opção *3 - Buscar Jogo*';
+                    
+                    // Divide em partes se for muito grande
+                    if (msg.length > 4000) {
+                        const partes = msg.match(/[\s\S]{1,4000}/g) || [msg];
+                        for (let i = 0; i < partes.length; i++) {
+                            await delay(1000);
+                            await sock.sendMessage(sender, { text: partes[i] + (i < partes.length - 1 ? '\n\n(continua...)' : '') });
+                        }
+                    } else {
+                        await sock.sendMessage(sender, { text: msg });
+                    }
+
+                } else if (text === '5' || text.includes('perfil')) {
+                    const perfilUser = db.getPerfil(sender);
+                    let msg = '👤 *Seu Perfil*\n\n';
+                    msg += `📱 Número: ${numeroLimpo}\n`;
+                    msg += `⏱️ Acesso: ${perfilUser.temAcesso ? '✅ Ativo' : '❌ Inativo'}\n`;
+                    
+                    if (perfilUser.keyInfo) {
+                        msg += `🔑 Key: ${perfilUser.keyInfo.key}\n`;
+                        msg += `📅 Expira: ${perfilUser.keyInfo.expira}\n`;
+                        msg += `⏰ Tipo: ${perfilUser.keyInfo.tipo || 'Normal'}\n`;
+                    }
+                    
+                    msg += `\n🎮 Jogos resgatados: ${perfilUser.totalResgatados}`;
+                    
+                    // Se teste expirado, avisa
+                    if (perfilUser.usouTeste && !perfilUser.temAcesso) {
+                        msg += `\n\n😢 *Seu teste expirou!*\nDigite *menu* para ver opções de compra.`;
+                    }
+                    
+                    await sock.sendMessage(sender, { text: msg });
+
+                } else if (text === '6' || text.includes('teste') || text.includes('gratis') || text.includes('grátis')) {
+                    userStates.set(sender, { step: 'resgatar_key_teste' });
+                    await sock.sendMessage(sender, {
+                        text: '🎉 *Key Teste Grátis*\n\nEscolha a duração do teste:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\n⚠️ *Atenção:* Você só pode gerar 1 key de teste!\n\nDigite o número:'
+                    });
+
+                } else if (text === '0' || text.includes('atendente')) {
+                    await sock.sendMessage(sender, {
+                        text: `💬 *Falar com Atendente*\n\nAguarde um momento...\n\nOu chame direto: +${ADMIN_NUMBER}`
+                    });
+                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                        text: `📩 *Novo Atendimento*\n\nCliente: ${pushName}\nNúmero: ${numeroLimpo}\n\nEstá aguardando atendimento.`
+                    });
+
+                } else if (isAdmin && (text === 'admin' || text === 'adm')) {
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await sock.sendMessage(sender, { text: getMenuAdmin() });
+
+                } else if (['oi', 'ola', 'olá', 'hey', 'eai', 'eae'].includes(text)) {
+                    await sock.sendMessage(sender, { 
+                        text: getMenuPrincipal(pushName)
+                    });
+
+                } else {
+                    await sock.sendMessage(sender, { 
+                        text: getMenuPrincipal(pushName)
+                    });
+                }
             }
 
-            // RESGATAR KEY
+            // RESGATAR KEY NORMAL
             else if (userState.step === 'resgatar_key') {
                 const key = text.toUpperCase().replace(/\s/g, '');
-                
-                if (!key.startsWith('NYUX')) {
-                    await sock.sendMessage(sender, { 
-                        text: '❌ *Key inválida!*\n\nFormato correto: NYUX-XXXX-XXXX\n\nTente novamente ou digite *menu*:' 
-                    });
-                    return;
-                }
-                
                 const resultado = db.resgatarKey(key, sender, pushName);
                 
                 if (resultado.sucesso) {
                     userStates.set(sender, { step: 'menu' });
                     await sock.sendMessage(sender, {
-                        text: `✅ *Key Resgatada com Sucesso!*\n\n🏆 Plano: ${resultado.plano}\n⏰ Duração: ${resultado.duracao}\n📅 Expira em: ${resultado.expira}\n\n🎮 Agora você pode buscar jogos!\n\nDigite *3* para começar.`
+                        text: `✅ *Key Resgatada com Sucesso!*\n\n🎆 Plano: ${resultado.plano}\n⏱️ Duração: ${resultado.duracao}\n📅 Expira em: ${resultado.expira}\n\nAgora você pode:\n• Buscar jogos (opção 3)\n• Ver lista de jogos (opção 4)\n\n🎮 Aproveite!`
                     });
                 } else {
                     await sock.sendMessage(sender, {
-                        text: `❌ *${resultado.erro}*\n\nVerifique se digitou corretamente ou digite *menu*:`
+                        text: `❌ *Key Inválida*\n\n${resultado.erro}\n\nTente novamente ou digite *menu* para voltar.`
                     });
                 }
             }
 
-            // BUSCAR JOGO
-            else if (userState.step === 'buscar_jogo') {
-                if (text.length < 3) {
-                    await sock.sendMessage(sender, { 
-                        text: '❌ Digite pelo menos 3 letras!\n\nTente novamente:' 
+            // RESGATAR KEY TESTE GRÁTIS
+            else if (userState.step === 'resgatar_key_teste') {
+                let duracao, horas;
+                
+                if (text === '1') { duracao = '1 hora'; horas = 1; }
+                else if (text === '2') { duracao = '2 horas'; horas = 2; }
+                else if (text === '3') { duracao = '6 horas'; horas = 6; }
+                else {
+                    await sock.sendMessage(sender, { text: '❌ Opção inválida. Digite 1, 2 ou 3:' });
+                    return;
+                }
+                
+                // Verifica se já usou teste
+                const jaUsouTeste = db.verificarTesteUsado(sender);
+                if (jaUsouTeste) {
+                    userStates.set(sender, { step: 'menu' });
+                    await sock.sendMessage(sender, {
+                        text: '❌ *Você já usou seu teste grátis!*\n\nCompre uma key para ter acesso ilimitado:\n• 7 dias: R$ 10\n• 1 mês: R$ 25\n• Lifetime: R$ 80\n\n💬 Chame o admin: +' + ADMIN_NUMBER
                     });
                     return;
                 }
                 
-                const conta = db.buscarConta(text);
+                const prefixo = 'TESTE';
+                const sufixo = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
+                const key = `${prefixo}-${meio}-${sufixo}`;
                 
-                if (conta) {
-                    db.marcarContaUsada(conta.id, sender);
+                const resultado = db.criarKeyTeste(key, duracao, horas, sender, pushName);
+                
+                if (resultado.sucesso) {
                     userStates.set(sender, { step: 'menu' });
-                    
                     await sock.sendMessage(sender, {
-                        text: `🎮 *${conta.jogo}*\n📂 ${conta.categoria}\n\n👤 *Login:* \`${conta.login}\`\n🔒 *Senha:* \`${conta.senha}\`\n\n⚠️ *IMPORTANTE:*\n1️⃣ Faça login na Steam\n2️⃣ Baixe o jogo\n3️⃣ Ative *MODO OFFLINE*\n4️⃣ Jogue!\n\n🔒 *Não altere a senha!*\n⏰ Conta válida por 24h\n\n_Digite *menu* para voltar_`
+                        text: `🎉 *Key Teste Gerada!*\n\n🔑 Key: ${key}\n⏱️ Duração: ${duracao}\n📅 Expira em: ${resultado.expira}\n\n✅ Agora você tem acesso completo ao catálogo!\n\n🎮 Aproveite seu teste!`
                     });
                 } else {
                     await sock.sendMessage(sender, {
-                        text: `❌ *"${text}" não encontrado*\n\nTente outro nome ou digite *4* para ver a lista completa.`
+                        text: `❌ *Erro ao gerar teste*\n\n${resultado.erro}\n\nDigite *menu* para voltar.`
+                    });
+                }
+            }
+
+            // BUSCAR JOGO - NÃO MARCA COMO USADA (CONTAS ILIMITADAS)
+            else if (userState.step === 'buscar_jogo') {
+                const conta = db.buscarConta(text);
+                
+                if (conta) {
+                    userStates.set(sender, { step: 'menu' });
+                    
+                    await sock.sendMessage(sender, {
+                        text: `🎮 *Conta Encontrada!*\n\n*Jogo:* ${conta.jogo}\n*Categoria:* ${conta.categoria}\n\n👤 *Login:* ${conta.login}\n🔒 *Senha:* ${conta.senha}\n\n⚠️ *IMPORTANTE:*\n1. Faça login na Steam\n2. Baixe o jogo\n3. Ative o *MODO OFFLINE*\n4. Jogue!\n\n🔒 Não altere a senha!\n\n✅ Esta conta é compartilhada - você pode usar quantas vezes quiser!\n\nDigite *menu* para voltar.`
+                    });
+                } else {
+                    await sock.sendMessage(sender, {
+                        text: `❌ *Jogo não encontrado ou indisponível*\n\nNão temos "${text}" disponível no momento.\n\nDigite *4* para ver a lista de jogos ou tente outro nome.`
                     });
                 }
             }
 
             // MENU ADMIN
-            else if (userState.step === 'admin_menu') {
-                if (!isAdmin) {
-                    await sock.sendMessage(sender, { 
-                        text: '❌ *Acesso negado!*\n\nVocê não tem permissão para acessar o painel admin.' 
+            else if (userState.step === 'admin_menu' && isAdmin) {
+                if (text === '1') {
+                    userStates.set(sender, { step: 'admin_add_conta_nome' });
+                    await sock.sendMessage(sender, {
+                        text: '➕ *Adicionar Conta - Passo 1/4*\n\nDigite o *NOME DO JOGO*:\n\n_Exemplo: GTA 5, FIFA 24, Call of Duty..._'
                     });
-                    userStates.set(sender, { step: 'menu' });
-                    return;
-                }
 
-                switch(text) {
-                    case '1':
-                        userStates.set(sender, { step: 'admin_add' });
-                        await sock.sendMessage(sender, {
-                            text: '➕ *Adicionar Conta*\n\nFormato:\n`Jogo | Categoria | Login | Senha`\n\nOu deixe auto:\n`Jogo | auto | Login | Senha`\n\n_Exemplo: GTA 5 | auto | user123 | pass456_'
-                        });
-                        break;
+                } else if (text === '2') {
+                    userStates.set(sender, { step: 'admin_gerar_key' });
+                    await sock.sendMessage(sender, {
+                        text: '🔑 *Gerar Key*\n\nEscolha a duração:\n\n1️⃣ 7 dias\n2️⃣ 1 mês  \n3️⃣ Lifetime\n\nDigite o número:'
+                    });
 
-                    case '2':
-                        userStates.set(sender, { step: 'admin_key' });
-                        await sock.sendMessage(sender, {
-                            text: '🔑 *Gerar Key*\n\nEscolha:\n\n1️⃣ 7 dias - R$ 10\n2️⃣ 1 mês - R$ 25\n3️⃣ 1 ano - R$ 80\n4️⃣ Lifetime - R$ 150\n\nDigite o número:'
-                        });
-                        break;
+                } else if (text === '3') {
+                    userStates.set(sender, { step: 'admin_gerar_key_teste' });
+                    await sock.sendMessage(sender, {
+                        text: '🎁 *Gerar Key Teste (Admin)*\n\nEscolha a duração:\n\n1️⃣ 1 hora\n2️⃣ 2 horas\n3️⃣ 6 horas\n\nDigite o número:'
+                    });
 
-                    case '3':
-                        userStates.set(sender, { step: 'admin_import' });
-                        await sock.sendMessage(sender, {
-                            text: '📁 *Importar Contas*\n\nEnvie o arquivo .txt com as contas Steam.\n\nO bot detectará automaticamente:\n• Nome do jogo\n• Login e senha\n• Categoria\n\n_Aguarde o arquivo..._'
-                        });
-                        break;
+                } else if (text === '4') {
+                    userStates.set(sender, { step: 'admin_importar' });
+                    await sock.sendMessage(sender, {
+                        text: '📄 *Importar Contas*\n\nEnvie o arquivo .txt com as contas.\n\nO sistema detectará automaticamente:\n• Nome do jogo\n• Login e senha\n• Categoria\n\nAguardando arquivo...'
+                    });
 
-                    case '4':
-                        const stats = db.getEstatisticas();
-                        await sock.sendMessage(sender, {
-                            text: `📊 *Estatísticas*\n\n🎮 Total Jogos: ${stats.totalJogos}\n✅ Disponíveis: ${stats.disponiveis}\n❌ Usados: ${stats.usados}\n🔑 Keys Ativas: ${stats.keysAtivas}\n👥 Clientes: ${stats.totalClientes}\n📂 Categorias: ${stats.totalCategorias}\n\n_Digite *menu* para voltar_`
-                        });
-                        break;
+                } else if (text === '5') {
+                    const stats = db.getEstatisticas();
+                    await sock.sendMessage(sender, {
+                        text: `📊 *Estatísticas*\n\n🎮 Total de Jogos: ${stats.totalJogos}\n✅ Disponíveis: ${stats.disponiveis}\n❌ Usados: ${stats.usados}\n🔑 Keys Ativas: ${stats.keysAtivas}\n🎉 Keys Teste: ${stats.keysTeste}\n👥 Clientes: ${stats.totalClientes}\n📂 Categorias: ${stats.totalCategorias}`
+                    });
 
-                    case '5':
-                        const total = db.getTotalJogos();
-                        const disponiveis = db.getCategoriasResumo();
-                        let lista = `📋 *Total: ${total} jogos*\n\n`;
-                        for (const [cat, qtd] of Object.entries(disponiveis)) {
-                            lista += `${cat}: ${qtd}\n`;
+                } else if (text === '6') {
+                    const jogos = db.getTodosJogosDisponiveis();
+                    let msg = '📋 *Todos os Jogos Disponíveis*\n\n';
+                    
+                    let parteAtual = '';
+                    const partes = [];
+                    
+                    for (const jogo of jogos) {
+                        const linha = `• ${jogo.jogo} (${jogo.categoria})\n`;
+                        if ((parteAtual + linha).length > 4000) {
+                            partes.push(parteAtual);
+                            parteAtual = linha;
+                        } else {
+                            parteAtual += linha;
                         }
-                        await sock.sendMessage(sender, { text: lista });
-                        break;
+                    }
+                    partes.push(parteAtual);
+                    
+                    await sock.sendMessage(sender, { text: msg + partes[0] });
+                    
+                    for (let i = 1; i < partes.length; i++) {
+                        await delay(1000);
+                        await sock.sendMessage(sender, { text: partes[i] });
+                    }
 
-                    case '6':
-                        userStates.set(sender, { step: 'admin_broadcast' });
-                        await sock.sendMessage(sender, {
-                            text: '📢 *Broadcast*\n\nDigite a mensagem que será enviada para todos os clientes:\n\n_Ex: 🎉 Novo jogo: Elden Ring adicionado!_'
-                        });
-                        break;
+                } else if (text === '7') {
+                    userStates.set(sender, { step: 'admin_broadcast' });
+                    await sock.sendMessage(sender, {
+                        text: '📢 *Broadcast*\n\nDigite a mensagem que será enviada para todos os clientes:\n\n_Exemplo: Novo jogo adicionado! Call of Duty Modern Warfare 3 já disponível!_'
+                    });
 
-                    case '0':
-                    case 'menu':
-                        userStates.set(sender, { step: 'menu' });
-                        await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
-                        break;
+                } else if (text === '0' || text === 'menu') {
+                    userStates.set(sender, { step: 'menu' });
+                    await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
 
-                    default:
-                        await sock.sendMessage(sender, { text: getMenuAdmin() });
+                } else {
+                    await sock.sendMessage(sender, { text: getMenuAdmin() });
                 }
             }
 
-            // ADMIN: Adicionar conta
-            else if (userState.step === 'admin_add') {
-                if (!isAdmin) return;
+            // ADMIN: ADICIONAR CONTA - PASSO 1 (NOME)
+            else if (userState.step === 'admin_add_conta_nome' && isAdmin) {
+                userStates.set(sender, { 
+                    step: 'admin_add_conta_categoria',
+                    tempConta: { jogo: text }
+                });
                 
-                const partes = text.split('|').map(p => p.trim());
-                if (partes.length >= 4) {
-                    const [jogo, cat, login, senha] = partes;
-                    const categoria = (cat === 'auto' || !cat) ? detectarCategoria(jogo) : cat;
+                const categorias = [
+                    '🗡️ Assassin\'s Creed',
+                    '🔫 Call of Duty',
+                    '🧟 Resident Evil',
+                    '⚽ Esportes',
+                    '🏎️ Corrida',
+                    '🚗 Rockstar Games',
+                    '🦸 Super-Heróis',
+                    '⚔️ Soulslike',
+                    '🐺 CD Projekt Red',
+                    '🚜 Simuladores',
+                    '👻 Terror',
+                    '🎲 RPG',
+                    '🥊 Luta',
+                    '🕵️ Stealth',
+                    '🧠 Estratégia',
+                    '🌲 Survival',
+                    '🍄 Nintendo',
+                    '💙 Sega',
+                    '💣 Guerra',
+                    '🎮 Ação/Aventura'
+                ];
+                
+                let msg = '➕ *Adicionar Conta - Passo 2/4*\n\nEscolha a *CATEGORIA*:\n\n';
+                categorias.forEach((cat, index) => {
+                    msg += `${index + 1}. ${cat}\n`;
+                });
+                msg += '\nDigite o número da categoria:';
+                
+                await sock.sendMessage(sender, { text: msg });
+            }
+
+            // ADMIN: ADICIONAR CONTA - PASSO 2 (CATEGORIA)
+            else if (userState.step === 'admin_add_conta_categoria' && isAdmin) {
+                const categorias = [
+                    '🗡️ Assassin\'s Creed',
+                    '🔫 Call of Duty',
+                    '🧟 Resident Evil',
+                    '⚽ Esportes',
+                    '🏎️ Corrida',
+                    '🚗 Rockstar Games',
+                    '🦸 Super-Heróis',
+                    '⚔️ Soulslike',
+                    '🐺 CD Projekt Red',
+                    '🚜 Simuladores',
+                    '👻 Terror',
+                    '🎲 RPG',
+                    '🥊 Luta',
+                    '🕵️ Stealth',
+                    '🧠 Estratégia',
+                    '🌲 Survival',
+                    '🍄 Nintendo',
+                    '💙 Sega',
+                    '💣 Guerra',
+                    '🎮 Ação/Aventura'
+                ];
+                
+                const escolha = parseInt(text) - 1;
+                
+                if (escolha >= 0 && escolha < categorias.length) {
+                    const temp = userState.tempConta || {};
+                    temp.categoria = categorias[escolha];
                     
-                    db.addConta(jogo, categoria, login, senha);
-                    userStates.set(sender, { step: 'admin_menu' });
-                    await sock.sendMessage(sender, { 
-                        text: `✅ *Conta adicionada!*\n\n🎮 ${jogo}\n📂 ${categoria}\n\n_Digite *menu* ou envie outra conta._` 
+                    userStates.set(sender, { 
+                        step: 'admin_add_conta_login',
+                        tempConta: temp
+                    });
+                    
+                    await sock.sendMessage(sender, {
+                        text: '➕ *Adicionar Conta - Passo 3/4*\n\nDigite o *LOGIN* (usuário/email):'
                     });
                 } else {
-                    await sock.sendMessage(sender, { 
-                        text: '❌ Formato inválido!\n\nUse: `Jogo | Categoria | Login | Senha`' 
+                    await sock.sendMessage(sender, {
+                        text: '❌ Opção inválida. Digite um número de 1 a 20:'
                     });
                 }
             }
 
-            // ADMIN: Gerar key
-            else if (userState.step === 'admin_key') {
-                if (!isAdmin) return;
+            // ADMIN: ADICIONAR CONTA - PASSO 3 (LOGIN)
+            else if (userState.step === 'admin_add_conta_login' && isAdmin) {
+                const temp = userState.tempConta || {};
+                temp.login = text;
                 
-                const opcoes = {
-                    '1': ['7 dias', 7],
-                    '2': ['1 mês', 30],
-                    '3': ['1 ano', 365],
-                    '4': ['Lifetime', 99999]
-                };
+                userStates.set(sender, { 
+                    step: 'admin_add_conta_senha',
+                    tempConta: temp
+                });
                 
-                if (!opcoes[text]) {
-                    await sock.sendMessage(sender, { text: '❌ Digite 1, 2, 3 ou 4' });
-                    return;
-                }
-                
-                const [duracao, dias] = opcoes[text];
-                const key = gerarKey();
-                db.criarKey(key, duracao, dias);
-                
-                userStates.set(sender, { step: 'admin_menu' });
                 await sock.sendMessage(sender, {
-                    text: `🔑 *Key Gerada*\n\n\`\`\`${key}\`\`\`\n⏰ ${duracao}\n\n✅ Copie e envie ao cliente!`
+                    text: '➕ *Adicionar Conta - Passo 4/4*\n\nDigite a *SENHA*:'
                 });
             }
 
-            // ADMIN: Importar
-            else if (userState.step === 'admin_import') {
-                if (!isAdmin) return;
+            // ADMIN: ADICIONAR CONTA - PASSO 4 (SENHA)
+            else if (userState.step === 'admin_add_conta_senha' && isAdmin) {
+                const temp = userState.tempConta || {};
+                temp.senha = text;
                 
+                db.addConta(temp.jogo, temp.categoria, temp.login, temp.senha);
+                
+                userStates.set(sender, { step: 'admin_menu' });
+                
+                await sock.sendMessage(sender, {
+                    text: `✅ *Conta adicionada com sucesso!*\n\n🎮 ${temp.jogo}\n📂 ${temp.categoria}\n👤 ${temp.login}\n\n✅ Conta compartilhada - todos podem usar!\n\nDigite *menu* para voltar ao painel admin.`
+                });
+            }
+
+            // ADMIN: GERAR KEY NORMAL
+            else if (userState.step === 'admin_gerar_key' && isAdmin) {
+                let duracao, dias;
+                
+                if (text === '1') { duracao = '7 dias'; dias = 7; }
+                else if (text === '2') { duracao = '1 mês'; dias = 30; }
+                else if (text === '3') { duracao = 'Lifetime'; dias = 99999; }
+                else {
+                    await sock.sendMessage(sender, { text: '❌ Opção inválida. Digite 1, 2 ou 3:' });
+                    return;
+                }
+                
+                const prefixo = 'NYUX';
+                const sufixo = Math.random().toString(36).substring(2, 10).toUpperCase();
+                const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
+                const key = `${prefixo}-${meio}-${sufixo}`;
+                
+                db.criarKey(key, duracao, dias);
+                userStates.set(sender, { step: 'admin_menu' });
+                
+                await sock.sendMessage(sender, {
+                    text: `🔑 *Key Gerada!*\n\n*Key:* ${key}\n*Duração:* ${duracao}\n*Status:* ✅ Ativa\n\nCopie e envie para o cliente.`
+                });
+            }
+
+            // ADMIN: GERAR KEY TESTE
+            else if (userState.step === 'admin_gerar_key_teste' && isAdmin) {
+                let duracao, horas;
+                
+                if (text === '1') { duracao = '1 hora'; horas = 1; }
+                else if (text === '2') { duracao = '2 horas'; horas = 2; }
+                else if (text === '3') { duracao = '6 horas'; horas = 6; }
+                else {
+                    await sock.sendMessage(sender, { text: '❌ Opção inválida. Digite 1, 2 ou 3:' });
+                    return;
+                }
+                
+                const prefixo = 'TESTE';
+                const sufixo = Math.random().toString(36).substring(2, 8).toUpperCase();
+                const meio = Math.random().toString(36).substring(2, 6).toUpperCase();
+                const key = `${prefixo}-${meio}-${sufixo}`;
+                
+                db.criarKey(key, duracao, horas, true);
+                userStates.set(sender, { step: 'admin_menu' });
+                
+                await sock.sendMessage(sender, {
+                    text: `🎁 *Key Teste Gerada (Admin)!*\n\n*Key:* ${key}\n*Duração:* ${duracao}\n*Status:* ✅ Ativa\n\nEnvie para o cliente testar.`
+                });
+            }
+
+            // ADMIN: IMPORTAR TXT
+            else if (userState.step === 'admin_importar' && isAdmin) {
                 if (msg.message.documentMessage) {
-                    await sock.sendMessage(sender, { text: '⏳ *Processando arquivo...*' });
+                    await sock.sendMessage(sender, { text: '⏳ Processando arquivo...' });
                     
                     try {
                         const stream = await sock.downloadContentFromMessage(msg.message.documentMessage, 'document');
                         let buffer = Buffer.from([]);
-                        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
                         
-                        const resultado = db.importarTXT(buffer.toString('utf-8'));
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
+                        }
+                        
+                        const texto = buffer.toString('utf-8');
+                        const resultado = db.importarTXT(texto);
+                        
                         userStates.set(sender, { step: 'admin_menu' });
                         
                         await sock.sendMessage(sender, {
-                            text: `✅ *Importação Concluída!*\n\n📊 ${resultado.adicionadas} contas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categorias} categorias\n❌ ${resultado.erros} erros\n\n*Resumo:*\n${resultado.resumoCategorias}`
+                            text: `✅ *Importação Concluída!*\n\n📊 ${resultado.adicionadas} contas adicionadas\n🎮 ${resultado.jogosUnicos} jogos únicos\n📂 ${resultado.categorias} categorias\n❌ ${resultado.erros} erros\n\n✅ Todas as contas são compartilhadas (ilimitadas)!\n\nResumo por categoria:\n${resultado.resumoCategorias}`
                         });
+                        
                     } catch (err) {
-                        console.error('Erro importação:', err);
-                        await sock.sendMessage(sender, { text: '❌ Erro ao processar arquivo!' });
+                        await sock.sendMessage(sender, {
+                            text: '❌ Erro ao processar arquivo. Certifique-se de que é um .txt válido.'
+                        });
                     }
                 } else {
-                    await sock.sendMessage(sender, { text: '📁 Envie o arquivo .txt (não digite nada)' });
+                    await sock.sendMessage(sender, {
+                        text: '📄 Aguardando arquivo .txt...\n\nEnvie o arquivo com as contas.'
+                    });
                 }
             }
 
-            // ADMIN: Broadcast
-            else if (userState.step === 'admin_broadcast') {
-                if (!isAdmin) return;
-                
+            // ADMIN: BROADCAST
+            else if (userState.step === 'admin_broadcast' && isAdmin) {
                 const clientes = db.getTodosClientes();
-                if (clientes.length === 0) {
-                    userStates.set(sender, { step: 'admin_menu' });
-                    await sock.sendMessage(sender, { text: '❌ Nenhum cliente cadastrado.' });
-                    return;
-                }
-                
-                await sock.sendMessage(sender, { text: `📢 Enviando para ${clientes.length} clientes...` });
-                
                 let enviados = 0;
+                
+                await sock.sendMessage(sender, {
+                    text: `📢 Enviando para ${clientes.length} clientes...`
+                });
+                
                 for (const cliente of clientes) {
                     try {
-                        await sock.sendMessage(cliente.numero, { 
-                            text: `📢 *NyuxStore*\n\n${text}\n\n_Digite *menu* para opções_` 
+                        await sock.sendMessage(cliente.numero, {
+                            text: `📢 *Mensagem da NyuxStore*\n\n${text}\n\n_Digite menu para ver opções_`
                         });
                         enviados++;
                         await delay(500);
-                    } catch (e) { console.log('Erro envio:', cliente.numero); }
+                    } catch (e) {
+                        console.log('Erro ao enviar para:', cliente.numero);
+                    }
                 }
                 
                 userStates.set(sender, { step: 'admin_menu' });
-                await sock.sendMessage(sender, { text: `✅ Enviado para ${enviados}/${clientes.length} clientes!` });
+                await sock.sendMessage(sender, {
+                    text: `✅ *Broadcast enviado!*\n\n📤 ${enviados}/${clientes.length} mensagens entregues.`
+                });
             }
 
-            // Voltar ao menu
-            if (text === 'menu' || text === 'voltar' || text === 'sair') {
+            // COMANDO MENU (qualquer momento)
+            if (text === 'menu' || text === 'voltar') {
                 userStates.set(sender, { step: 'menu' });
-                await sock.sendMessage(sender, { text: getMenuPrincipal(pushName) });
+                
+                // Verifica se teste expirou para mostrar menu correto
+                const perfilAtual = db.getPerfil(sender);
+                if (perfilAtual.usouTeste && !perfilAtual.temAcesso && !isAdmin) {
+                    await sock.sendMessage(sender, { 
+                        text: getMenuTesteExpirado(pushName)
+                    });
+                } else {
+                    await sock.sendMessage(sender, { 
+                        text: getMenuPrincipal(pushName)
+                    });
+                }
             }
 
         } catch (error) {
-            console.error('❌ Erro:', error);
-            await sock.sendMessage(sender, { text: '❌ Erro! Digite *menu* para recomeçar.' });
+            console.error('Erro:', error);
+            await sock.sendMessage(sender, {
+                text: '❌ Ocorreu um erro. Digite *menu* para recomeçar.'
+            });
         }
     });
 
     return sock;
 }
 
-console.log('🚀 NyuxStore WhatsApp');
-console.log('🤖 Bot:', BOT_NUMBER);
-console.log('👤 Admin:', ADMIN_NUMBER);
+// Iniciar
+console.log('🚀 Iniciando NyuxStore WhatsApp...');
+console.log('🤖 Bot Number:', BOT_NUMBER);
+console.log('👑 Admin Number:', ADMIN_NUMBER);
 connectToWhatsApp();
