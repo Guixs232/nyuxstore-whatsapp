@@ -391,8 +391,8 @@ async function resgatarKey(sock, jid, key) {
         
         // Notificar Super Admin
         const superAdmins = db.getAllSuperAdmins();
-        for (const super of superAdmins) {
-            await sock.sendMessage(super.numero, {
+        for (const sAdmin of superAdmins) {
+            await sock.sendMessage(sAdmin.numero, {
                 text: `👤 *Novo Admin!*\n\n${jid} resgatou uma KEY de admin.\n\nUse a opção 99 no painel para gerenciar.`
             });
         }
