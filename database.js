@@ -3,506 +3,505 @@ const path = require('path');
 
 class Database {
     constructor() {
-        this.dataDir = './data';
-        this.ensureDataDir();
+        this.dataDir = path.join(__dirname, 'data');
+        this.ensureDirectory();
         
-        this.contasFile = path.join(this.dataDir, 'contas.json');
-        this.keysFile = path.join(this.dataDir, 'keys.json');
-        this.clientesFile = path.join(this.dataDir, 'clientes.json');
-        this.logsFile = path.join(this.dataDir, 'logs.json');
-        this.banidosFile = path.join(this.dataDir, 'banidos.json');
+        this.files = {
+            contas: path.join(this.dataDir, 'contas.json'),
+            clientes: path.join(this.dataDir, 'clientes.json'),
+            keys: path.join(this.dataDir, 'keys.json'),
+            logs: path.join(this.dataDir, 'logs.json'),
+            blacklist: path.join(this.dataDir, 'blacklist.json'),
+            cupons: path.join(this.dataDir, 'cupons.json'),
+            favoritos: path.join(this.dataDir, 'favoritos.json'),
+            indicacoes: path.join(this.dataDir, 'indicacoes.json'),
+            tickets: path.join(this.dataDir, 'tickets.json'),
+            config: path.join(this.dataDir, 'config.json')
+        };
         
-        this.contas = this.loadJson(this.contasFile, []);
-        this.keys = this.loadJson(this.keysFile, []);
-        this.clientes = this.loadJson(this.clientesFile, {});
-        this.logs = this.loadJson(this.logsFile, []);
-        this.banidos = this.loadJson(this.banidosFile, []);
-        
-        this.masterKeyUsada = false;
-        this.nextContaId = this.contas.length > 0 ? Math.max(...this.contas.map(c => c.id || 0)) + 1 : 1;
+        this.data = {};
+        this.loadAll();
     }
     
-    ensureDataDir() {
+    ensureDirectory() {
         if (!fs.existsSync(this.dataDir)) {
             fs.mkdirSync(this.dataDir, { recursive: true });
         }
     }
     
-    loadJson(file, defaultValue) {
-        try {
-            if (fs.existsSync(file)) {
-                return JSON.parse(fs.readFileSync(file, 'utf8'));
+    loadAll() {
+        for (const [key, filePath] of Object.entries(this.files)) {
+            try {
+                if (fs.existsSync(filePath)) {
+                    this.data[key] = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                } else {
+                    this.data[key] = [];
+                    if (key === 'config') this.data[key] = {};
+                    this.save(key);
+                }
+            } catch (e) {
+                this.data[key] = [];
+                if (key === 'config') this.data[key] = {};
             }
-        } catch (e) {
-            console.error(`Erro ao carregar ${file}:`, e.message);
         }
-        return defaultValue;
     }
     
-    saveJson(file, data) {
+    save(key) {
         try {
-            fs.writeFileSync(file, JSON.stringify(data, null, 2));
+            fs.writeFileSync(this.files[key], JSON.stringify(this.data[key], null, 2));
         } catch (e) {
-            console.error(`Erro ao salvar ${file}:`, e.message);
+            console.error(`Erro ao salvar ${key}:`, e);
         }
     }
     
-    saveAll() {
-        this.saveJson(this.contasFile, this.contas);
-        this.saveJson(this.keysFile, this.keys);
-        this.saveJson(this.clientesFile, this.clientes);
-        this.saveJson(this.logsFile, this.logs);
-        this.saveJson(this.banidosFile, this.banidos);
-    }
-    
-    // ========== CONTAS ==========
-    adicionarConta(conta) {
+    // ============== CONTAS ==============
+    addConta(conta) {
+        const id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
         const novaConta = {
-            id: this.nextContaId++,
+            id,
             jogo: conta.jogo,
             login: conta.login,
             senha: conta.senha,
-            categoria: conta.categoria || '🎮 Ação/Aventura',
-            plataforma: conta.plataforma || 'Steam',
-            dataAdicao: new Date().toISOString(),
-            disponivel: true
+            dataAdicao: Date.now(),
+            usos: 0
         };
-        this.contas.push(novaConta);
-        this.saveJson(this.contasFile, this.contas);
-        this.log('ADICIONAR_CONTA', 'sistema', { jogo: conta.jogo });
-        return { sucesso: true, id: novaConta.id };
+        this.data.contas.push(novaConta);
+        this.save('contas');
+        this.log(`Conta adicionada: ${conta.jogo}`);
+        return id;
     }
     
-    removerConta(id) {
-        const index = this.contas.findIndex(c => c.id === id);
-        if (index === -1) return { sucesso: false, erro: 'Conta não encontrada' };
-        const conta = this.contas[index];
-        this.contas.splice(index, 1);
-        this.saveJson(this.contasFile, this.contas);
-        this.log('REMOVER_CONTA', 'sistema', { id, jogo: conta.jogo });
-        return { sucesso: true };
-    }
-    
-    removerContaPorNome(nome) {
-        const index = this.contas.findIndex(c => c.jogo.toLowerCase().includes(nome.toLowerCase()));
-        if (index === -1) return { sucesso: false };
-        const conta = this.contas[index];
-        this.contas.splice(index, 1);
-        this.saveJson(this.contasFile, this.contas);
-        return { sucesso: true, jogo: conta.jogo };
-    }
-    
-    buscarConta(nome) {
-        return this.contas.find(c => 
-            c.disponivel && 
-            c.jogo.toLowerCase().includes(nome.toLowerCase())
-        );
-    }
-    
-    buscarContaAleatoria(nome) {
-        const matches = this.contas.filter(c => 
-            c.disponivel && 
-            c.jogo.toLowerCase().includes(nome.toLowerCase())
-        );
-        if (matches.length === 0) return null;
-        return matches[Math.floor(Math.random() * matches.length)];
-    }
-    
-    buscarContasSimilares(nome, limite = 3) {
-        return this.contas
-            .filter(c => c.disponivel)
-            .filter(c => {
-                const jogoLower = c.jogo.toLowerCase();
-                const nomeLower = nome.toLowerCase();
-                // Verifica se alguma palavra do nome está no jogo
-                const palavras = nomeLower.split(/\s+/);
-                return palavras.some(p => jogoLower.includes(p));
-            })
-            .slice(0, limite);
-    }
-    
-    getTodosJogosDisponiveis() {
-        return this.contas.filter(c => c.disponivel);
-    }
-    
-    // ========== KEYS ==========
-    gerarKey(key, plano, dias, geradoPor) {
-        const expira = new Date();
-        expira.setDate(expira.getDate() + dias);
+    addMultiplasContas(contas) {
+        let adicionadas = 0;
+        let erros = 0;
         
-        const novaKey = {
-            key: key,
-            plano: plano,
-            dias: dias,
-            expira: expira.toISOString(),
-            usada: false,
-            usadaPor: null,
-            dataUso: null,
-            geradoPor: geradoPor,
-            dataGeracao: new Date().toISOString()
-        };
-        
-        this.keys.push(novaKey);
-        this.saveJson(this.keysFile, this.keys);
-        this.log('GERAR_KEY', geradoPor, { key, plano });
-        return { sucesso: true };
-    }
-    
-    resgatarKey(key, numero, nome) {
-        const keyObj = this.keys.find(k => k.key === key && !k.usada);
-        if (!keyObj) return { sucesso: false, erro: 'Key inválida ou já usada' };
-        
-        keyObj.usada = true;
-        keyObj.usadaPor = numero;
-        keyObj.dataUso = new Date().toISOString();
-        this.saveJson(this.keysFile, this.keys);
-        
-        // Atualiza cliente
-        if (!this.clientes[numero]) {
-            this.clientes[numero] = this.criarPerfil(numero, nome);
-        }
-        this.clientes[numero].temAcesso = true;
-        this.clientes[numero].keyInfo = {
-            key: key,
-            plano: keyObj.plano,
-            expira: new Date(keyObj.expira).toLocaleDateString('pt-BR'),
-            dataExpiracao: keyObj.expira
-        };
-        this.clientes[numero].keysResgatadas.push({
-            key: key,
-            plano: keyObj.plano,
-            data: new Date().toISOString()
-        });
-        this.saveJson(this.clientesFile, this.clientes);
-        
-        this.log('RESGATAR_KEY', numero, { key, plano: keyObj.plano });
-        return { 
-            sucesso: true, 
-            plano: keyObj.plano, 
-            expira: new Date(keyObj.expira).toLocaleDateString('pt-BR')
-        };
-    }
-    
-    resgatarMasterKey(key, numero, nome) {
-        if (this.masterKeyUsada) {
-            return { sucesso: false, erro: 'Master key já usada' };
-        }
-        
-        this.masterKeyUsada = true;
-        
-        if (!this.clientes[numero]) {
-            this.clientes[numero] = this.criarPerfil(numero, nome);
-        }
-        this.clientes[numero].temAcesso = true;
-        this.clientes[numero].acessoPermanente = true;
-        this.clientes[numero].isAdmin = true;
-        this.saveJson(this.clientesFile, this.clientes);
-        
-        this.log('MASTER_KEY', numero, { key });
-        return { sucesso: true };
-    }
-    
-    isAdminMaster(numero) {
-        return this.clientes[numero]?.isAdmin === true;
-    }
-    
-    // ========== KEYS TESTE ==========
-    gerarKeyTesteAdmin(key, duracao, horas, geradoPor) {
-        const expira = new Date();
-        expira.setHours(expira.getHours() + horas);
-        
-        const novaKey = {
-            key: key,
-            tipo: 'teste',
-            duracao: duracao,
-            horas: horas,
-            expira: expira.toISOString(),
-            usada: false,
-            usadaPor: null,
-            dataUso: null,
-            geradoPor: geradoPor,
-            dataGeracao: new Date().toISOString()
-        };
-        
-        this.keys.push(novaKey);
-        this.saveJson(this.keysFile, this.keys);
-        this.log('GERAR_KEY_TESTE', geradoPor, { key, duracao });
-        return { sucesso: true, expira: expira.toLocaleString('pt-BR') };
-    }
-    
-    criarKeyTeste(key, duracao, horas, numero, nome) {
-        const expira = new Date();
-        expira.setHours(expira.getHours() + horas);
-        
-        const novaKey = {
-            key: key,
-            tipo: 'teste',
-            duracao: duracao,
-            horas: horas,
-            expira: expira.toISOString(),
-            usada: true,
-            usadaPor: numero,
-            dataUso: new Date().toISOString()
-        };
-        
-        this.keys.push(novaKey);
-        this.saveJson(this.keysFile, this.keys);
-        
-        // Atualiza cliente
-        if (!this.clientes[numero]) {
-            this.clientes[numero] = this.criarPerfil(numero, nome);
-        }
-        this.clientes[numero].temAcesso = true;
-        this.clientes[numero].usouTeste = true;
-        this.clientes[numero].keyInfo = {
-            key: key,
-            plano: 'teste',
-            expira: expira.toLocaleString('pt-BR'),
-            dataExpiracao: expira.toISOString()
-        };
-        this.saveJson(this.clientesFile, this.clientes);
-        
-        this.log('USAR_TESTE', numero, { key, duracao });
-        return { sucesso: true, expira: expira.toLocaleString('pt-BR') };
-    }
-    
-    verificarTesteUsado(numero) {
-        return this.clientes[numero]?.usouTeste === true;
-    }
-    
-    // ========== CLIENTES ==========
-    criarPerfil(numero, nome) {
-        return {
-            numero: numero,
-            nome: nome,
-            dataRegistro: new Date().toISOString(),
-            temAcesso: false,
-            acessoPermanente: false,
-            usouTeste: false,
-            isAdmin: false,
-            keyInfo: null,
-            jogosResgatados: [],
-            jogosFavoritos: [],
-            keysResgatadas: [],
-            indicacoes: 0,
-            horasBonus: 0
-        };
-    }
-    
-    getPerfil(numero) {
-        return this.clientes[numero] || this.criarPerfil(numero, 'Cliente');
-    }
-    
-    verificarAcesso(numero) {
-        const cliente = this.clientes[numero];
-        if (!cliente) return false;
-        if (cliente.acessoPermanente) return true;
-        if (!cliente.temAcesso) return false;
-        
-        // Verifica se expirou
-        if (cliente.keyInfo?.dataExpiracao) {
-            const expira = new Date(cliente.keyInfo.dataExpiracao);
-            if (expira < new Date()) {
-                cliente.temAcesso = false;
-                this.saveJson(this.clientesFile, this.clientes);
-                return false;
+        for (const conta of contas) {
+            if (conta.jogo && conta.login && conta.senha) {
+                this.addConta(conta);
+                adicionadas++;
+            } else {
+                erros++;
             }
         }
-        return true;
+        
+        this.log(`Importação em massa: ${adicionadas} adicionadas, ${erros} erros`);
+        return { adicionadas, erros };
     }
     
-    getTodosClientes() {
-        return Object.values(this.clientes);
-    }
-    
-    getClientesPorStatus() {
-        const todos = Object.values(this.clientes);
-        const agora = new Date();
-        const amanha = new Date(agora.getTime() + 24 * 60 * 60 * 1000);
-        
-        const ativos = todos.filter(c => {
-            if (!c.temAcesso) return false;
-            if (c.acessoPermanente) return true;
-            if (c.keyInfo?.dataExpiracao) {
-                return new Date(c.keyInfo.dataExpiracao) > agora;
-            }
-            return false;
-        });
-        
-        const inativos = todos.filter(c => !c.temAcesso || (c.keyInfo?.dataExpiracao && new Date(c.keyInfo.dataExpiracao) <= agora));
-        
-        const expirando = ativos.filter(c => {
-            if (c.acessoPermanente) return false;
-            if (c.keyInfo?.dataExpiracao) {
-                const expira = new Date(c.keyInfo.dataExpiracao);
-                return expira <= amanha && expira > agora;
-            }
-            return false;
-        }).map(c => ({
-            nome: c.nome,
-            horas: Math.ceil((new Date(c.keyInfo.dataExpiracao) - agora) / (1000 * 60 * 60))
-        }));
-        
-        return { ativos, inativos, expirando };
-    }
-    
-    // ========== JOGOS RESGATADOS ==========
-    registrarJogoResgatado(numero, conta) {
-        if (!this.clientes[numero]) return;
-        
-        this.clientes[numero].jogosResgatados.push({
-            id: conta.id,
-            jogo: conta.jogo,
-            login: conta.login,
-            senha: conta.senha,
-            categoria: conta.categoria,
-            dataResgate: new Date().toISOString()
-        });
-        this.saveJson(this.clientesFile, this.clientes);
-        this.log('RESGATAR_JOGO', numero, { jogo: conta.jogo });
-    }
-    
-    // ========== FAVORITOS ==========
-    getFavoritos(numero) {
-        const cliente = this.clientes[numero];
-        if (!cliente || !cliente.jogosFavoritos) return [];
-        return cliente.jogosFavoritos.map(id => this.contas.find(c => c.id === id)).filter(Boolean);
-    }
-    
-    toggleFavorito(numero, contaId) {
-        if (!this.clientes[numero]) return { adicionado: false, total: 0 };
-        
-        const favoritos = this.clientes[numero].jogosFavoritos || [];
-        const index = favoritos.indexOf(contaId);
-        
-        if (index === -1) {
-            favoritos.push(contaId);
-            var adicionado = true;
-        } else {
-            favoritos.splice(index, 1);
-            var adicionado = false;
-        }
-        
-        this.clientes[numero].jogosFavoritos = favoritos;
-        this.saveJson(this.clientesFile, this.clientes);
-        
-        return { adicionado, total: favoritos.length };
-    }
-    
-    // ========== INDICAÇÕES ==========
-    registrarIndicacao(indicadorNumero, indicadoNumero) {
-        if (!this.clientes[indicadorNumero]) {
-            return { sucesso: false, erro: 'Indicador não encontrado' };
-        }
-        
-        // Verifica se indicado já usou o bot
-        if (this.clientes[indicadoNumero]) {
-            return { sucesso: false, erro: 'Indicado já usou o bot' };
-        }
-        
-        const horasGanhas = 2;
-        this.clientes[indicadorNumero].indicacoes++;
-        this.clientes[indicadorNumero].horasBonus += horasGanhas;
-        
-        // Adiciona horas extras ao plano atual
-        if (this.clientes[indicadorNumero].keyInfo?.dataExpiracao) {
-            const expira = new Date(this.clientes[indicadorNumero].keyInfo.dataExpiracao);
-            expira.setHours(expira.getHours() + horasGanhas);
-            this.clientes[indicadorNumero].keyInfo.dataExpiracao = expira.toISOString();
-            this.clientes[indicadorNumero].keyInfo.expira = expira.toLocaleDateString('pt-BR');
-        }
-        
-        this.saveJson(this.clientesFile, this.clientes);
-        this.log('INDICACAO', indicadorNumero, { indicado: indicadoNumero, horas: horasGanhas });
-        
-        return { sucesso: true, horasGanhas };
-    }
-    
-    // ========== BANIDOS ==========
-    banirUsuario(numero, motivo) {
-        if (!this.banidos.find(b => b.numero === numero)) {
-            this.banidos.push({
-                numero: numero,
-                motivo: motivo,
-                data: new Date().toISOString()
-            });
-            this.saveJson(this.banidosFile, this.banidos);
-            this.log('BANIR', numero, { motivo });
-        }
-        
-        // Remove acesso
-        if (this.clientes[numero]) {
-            this.clientes[numero].temAcesso = false;
-            this.saveJson(this.clientesFile, this.clientes);
-        }
-    }
-    
-    desbanirUsuario(numero) {
-        const index = this.banidos.findIndex(b => b.numero === numero);
+    removeConta(id) {
+        const index = this.data.contas.findIndex(c => c.id === id);
         if (index !== -1) {
-            this.banidos.splice(index, 1);
-            this.saveJson(this.banidosFile, this.banidos);
-            this.log('DESBANIR', numero, {});
+            const conta = this.data.contas[index];
+            this.data.contas.splice(index, 1);
+            this.save('contas');
+            this.log(`Conta removida: ${conta.jogo}`);
             return true;
         }
         return false;
     }
     
-    isBanido(numero) {
-        return this.banidos.some(b => b.numero === numero);
+    removerTodasContas() {
+        const total = this.data.contas.length;
+        this.data.contas = [];
+        this.save('contas');
+        this.log(`TODAS as contas removidas (${total})`);
+        return total;
     }
     
-    // ========== LOGS ==========
-    log(tipo, numero, detalhes = {}) {
-        const logEntry = {
-            tipo: tipo,
-            numero: numero,
-            data: new Date().toISOString(),
-            detalhes: detalhes
+    getAllAccounts() {
+        return this.data.contas;
+    }
+    
+    getAllGames() {
+        const jogos = {};
+        this.data.contas.forEach(c => {
+            if (!jogos[c.jogo]) {
+                jogos[c.jogo] = { nome: c.jogo, contas: 0 };
+            }
+            jogos[c.jogo].contas++;
+        });
+        return Object.values(jogos);
+    }
+    
+    getContasByJogo(jogo) {
+        return this.data.contas.filter(c => c.jogo.toLowerCase() === jogo.toLowerCase());
+    }
+    
+    getContaById(id) {
+        return this.data.contas.find(c => c.id === id);
+    }
+    
+    getTotalContas() {
+        return this.data.contas.length;
+    }
+    
+    getUltimosJogos(limit = 5) {
+        return this.getAllGames().slice(-limit);
+    }
+    
+    // ============== CLIENTES ==============
+    addClient(cliente) {
+        const existente = this.getClient(cliente.numero);
+        if (existente) {
+            Object.assign(existente, cliente);
+            this.save('clientes');
+        } else {
+            this.data.clientes.push({
+                ...cliente,
+                pontos: 0,
+                resgates: 0,
+                favoritos: [],
+                dataCadastro: Date.now()
+            });
+            this.save('clientes');
+        }
+        this.log(`Novo cliente: ${cliente.numero} (${cliente.tipo})`);
+    }
+    
+    getClient(numero) {
+        return this.data.clientes.find(c => c.numero === numero);
+    }
+    
+    getAllClients() {
+        return this.data.clientes;
+    }
+    
+    getTotalClientes() {
+        return this.data.clientes.length;
+    }
+    
+    getClientesAtivos() {
+        return this.data.clientes.filter(c => c.ativo === true);
+    }
+    
+    getClientesInativos() {
+        return this.data.clientes.filter(c => !c.ativo);
+    }
+    
+    desativarCliente(numero) {
+        const cliente = this.getClient(numero);
+        if (cliente) {
+            cliente.ativo = false;
+            this.save('clientes');
+            this.log(`Cliente desativado: ${numero}`);
+        }
+    }
+    
+    isAdmin(numero) {
+        const cliente = this.getClient(numero);
+        return cliente && cliente.admin === true;
+    }
+    
+    isSuperAdmin(numero) {
+        const cliente = this.getClient(numero);
+        return cliente && cliente.superAdmin === true;
+    }
+    
+    // ============== SUPER ADMIN ==============
+    getAllAdmins() {
+        return this.data.clientes.filter(c => c.admin === true);
+    }
+    
+    getAllSuperAdmins() {
+        return this.data.clientes.filter(c => c.superAdmin === true);
+    }
+    
+    removerAdmin(numero) {
+        const cliente = this.getClient(numero);
+        if (cliente) {
+            cliente.admin = false;
+            cliente.superAdmin = false;
+            this.save('clientes');
+            this.log(`Admin removido: ${numero}`);
+        }
+    }
+    
+    promoverSuperAdmin(numero) {
+        const cliente = this.getClient(numero);
+        if (cliente) {
+            cliente.admin = true;
+            cliente.superAdmin = true;
+            this.save('clientes');
+            this.log(`Promovido a Super Admin: ${numero}`);
+        }
+    }
+    
+    rebaixarSuperAdmin(numero) {
+        const cliente = this.getClient(numero);
+        if (cliente) {
+            cliente.superAdmin = false;
+            this.save('clientes');
+            this.log(`Rebaixado de Super Admin: ${numero}`);
+        }
+    }
+    
+    isSuperAdminKeyUsed() {
+        return this.data.config.superAdminKeyUsed === true;
+    }
+    
+    marcarSuperAdminKeyUsada() {
+        this.data.config.superAdminKeyUsed = true;
+        this.save('config');
+        this.log('KEY de Super Admin utilizada!');
+    }
+    
+    // ============== KEYS ==============
+    addKey(keyData) {
+        this.data.keys.push({
+            ...keyData,
+            usada: false,
+            usadaPor: null,
+            dataUso: null
+        });
+        this.save('keys');
+        this.log(`KEY criada: ${keyData.key} (${keyData.tipo})`);
+    }
+    
+    getKey(key) {
+        return this.data.keys.find(k => k.key === key);
+    }
+    
+    markKeyUsed(key, usadoPor) {
+        const keyData = this.getKey(key);
+        if (keyData) {
+            keyData.usada = true;
+            keyData.usadaPor = usadoPor;
+            keyData.dataUso = Date.now();
+            this.save('keys');
+            this.log(`KEY usada: ${key} por ${usadoPor}`);
+        }
+    }
+    
+    getTotalKeys() {
+        return this.data.keys.length;
+    }
+    
+    getKeysUsadas() {
+        return this.data.keys.filter(k => k.usada).length;
+    }
+    
+    // ============== BLACKLIST ==============
+    addBlacklist(numero, motivo) {
+        if (!this.data.blacklist.find(b => b.numero === numero)) {
+            this.data.blacklist.push({
+                numero,
+                motivo,
+                data: Date.now()
+            });
+            this.save('blacklist');
+            this.log(`Blacklist: ${numero} - ${motivo}`);
+        }
+    }
+    
+    removeBlacklist(numero) {
+        const index = this.data.blacklist.findIndex(b => b.numero === numero);
+        if (index !== -1) {
+            this.data.blacklist.splice(index, 1);
+            this.save('blacklist');
+            this.log(`Removido da blacklist: ${numero}`);
+            return true;
+        }
+        return false;
+    }
+    
+    isBlacklisted(numero) {
+        return this.data.blacklist.some(b => b.numero === numero);
+    }
+    
+    getBlacklist() {
+        return this.data.blacklist;
+    }
+    
+    // ============== CUPONS ==============
+    addCupom(cupom) {
+        this.data.cupons.push({
+            codigo: cupom.codigo.toUpperCase(),
+            desconto: cupom.desconto,
+            usos: cupom.usos,
+            usados: 0,
+            dataCriacao: Date.now()
+        });
+        this.save('cupons');
+        this.log(`Cupom criado: ${cupom.codigo}`);
+    }
+    
+    getCupom(codigo) {
+        return this.data.cupons.find(c => c.codigo === codigo.toUpperCase());
+    }
+    
+    useCupom(codigo) {
+        const cupom = this.getCupom(codigo);
+        if (cupom && cupom.usados < cupom.usos) {
+            cupom.usados++;
+            this.save('cupons');
+            return cupom;
+        }
+        return null;
+    }
+    
+    getAllCupons() {
+        return this.data.cupons;
+    }
+    
+    // ============== FAVORITOS ==============
+    addFavorito(numero, jogo) {
+        let fav = this.data.favoritos.find(f => f.numero === numero);
+        if (!fav) {
+            fav = { numero, jogos: [] };
+            this.data.favoritos.push(fav);
+        }
+        if (!fav.jogos.includes(jogo)) {
+            fav.jogos.push(jogo);
+            this.save('favoritos');
+        }
+    }
+    
+    removeFavorito(numero, jogo) {
+        const fav = this.data.favoritos.find(f => f.numero === numero);
+        if (fav) {
+            fav.jogos = fav.jogos.filter(j => j !== jogo);
+            this.save('favoritos');
+        }
+    }
+    
+    getFavoritos(numero) {
+        const fav = this.data.favoritos.find(f => f.numero === numero);
+        return fav ? fav.jogos : [];
+    }
+    
+    // ============== INDICAÇÕES ==============
+    getCodigoIndicacao(numero) {
+        let ind = this.data.indicacoes.find(i => i.numero === numero);
+        if (!ind) {
+            ind = {
+                numero,
+                codigo: 'REF' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+                indicados: [],
+                pontos: 0
+            };
+            this.data.indicacoes.push(ind);
+            this.save('indicacoes');
+        }
+        return ind.codigo;
+    }
+    
+    usarCodigoIndicacao(codigo, novoCliente) {
+        const ind = this.data.indicacoes.find(i => i.codigo === codigo.toUpperCase());
+        if (ind && ind.numero !== novoCliente) {
+            ind.indicados.push(novoCliente);
+            ind.pontos += 10;
+            this.save('indicacoes');
+            
+            // Adicionar pontos ao indicador
+            const cliente = this.getClient(ind.numero);
+            if (cliente) {
+                cliente.pontos = (cliente.pontos || 0) + 10;
+                this.save('clientes');
+            }
+            
+            this.log(`Indicação: ${novoCliente} usou código de ${ind.numero}`);
+            return ind.numero;
+        }
+        return null;
+    }
+    
+    // ============== TICKETS ==============
+    addTicket(numero, mensagem) {
+        const ticket = {
+            id: Date.now().toString(36),
+            numero,
+            mensagem,
+            status: 'aberto',
+            resposta: null,
+            dataAbertura: Date.now(),
+            dataFechamento: null
         };
-        this.logs.unshift(logEntry);
-        
-        // Mantém apenas últimos 1000 logs
-        if (this.logs.length > 1000) {
-            this.logs = this.logs.slice(0, 1000);
-        }
-        
-        this.saveJson(this.logsFile, this.logs);
-        
-        // Log no console também
-        console.log(`[${tipo}] ${numero.substring(0, 15)}... - ${JSON.stringify(detalhes).substring(0, 50)}`);
+        this.data.tickets.push(ticket);
+        this.save('tickets');
+        this.log(`Ticket aberto: ${numero}`);
+        return ticket.id;
     }
     
-    getLogs(filtro = {}, limite = 50) {
-        let resultado = this.logs;
-        
-        if (filtro.tipo) {
-            resultado = resultado.filter(l => l.tipo === filtro.tipo);
+    responderTicket(id, resposta) {
+        const ticket = this.data.tickets.find(t => t.id === id);
+        if (ticket) {
+            ticket.resposta = resposta;
+            ticket.status = 'respondido';
+            ticket.dataFechamento = Date.now();
+            this.save('tickets');
+            this.log(`Ticket respondido: ${id}`);
+            return ticket.numero;
         }
-        
-        if (filtro.numero) {
-            resultado = resultado.filter(l => l.numero === filtro.numero);
-        }
-        
-        return resultado.slice(0, limite);
+        return null;
     }
     
-    // ========== ESTATÍSTICAS ==========
-    getEstatisticas() {
-        const { ativos, inativos } = this.getClientesPorStatus();
-        
-        return {
-            totalJogos: this.contas.length,
-            disponiveis: this.contas.filter(c => c.disponivel).length,
-            keysAtivas: this.keys.filter(k => k.usada).length,
-            keysDisponiveis: this.keys.filter(k => !k.usada).length,
-            totalClientes: Object.keys(this.clientes).length,
-            clientesAtivos: ativos.length,
-            clientesInativos: inativos.length,
-            banidos: this.banidos.length,
-            masterKeyUsada: this.masterKeyUsada,
-            totalLogs: this.logs.length
+    getTicketsAbertos() {
+        return this.data.tickets.filter(t => t.status === 'aberto');
+    }
+    
+    // ============== RANKING ==============
+    getRanking() {
+        return this.data.clientes
+            .filter(c => c.resgates > 0)
+            .sort((a, b) => b.resgates - a.resgates);
+    }
+    
+    addResgate(numero) {
+        const cliente = this.getClient(numero);
+        if (cliente) {
+            cliente.resgates = (cliente.resgates || 0) + 1;
+            cliente.pontos = (cliente.pontos || 0) + 5;
+            this.save('clientes');
+        }
+    }
+    
+    getTotalResgates() {
+        return this.data.clientes.reduce((total, c) => total + (c.resgates || 0), 0);
+    }
+    
+    // ============== LOGS ==============
+    log(mensagem) {
+        const log = {
+            data: Date.now(),
+            mensagem
         };
+        this.data.logs.push(log);
+        
+        // Manter apenas últimos 1000 logs
+        if (this.data.logs.length > 1000) {
+            this.data.logs = this.data.logs.slice(-1000);
+        }
+        
+        this.save('logs');
+        console.log(`[${new Date().toLocaleString()}] ${mensagem}`);
+    }
+    
+    getLogs(limit = 50) {
+        return this.data.logs.slice(-limit).reverse();
+    }
+    
+    // ============== BACKUP ==============
+    backup() {
+        const backupDir = path.join(__dirname, 'backups');
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupFile = path.join(backupDir, `backup-${timestamp}.json`);
+        
+        fs.writeFileSync(backupFile, JSON.stringify(this.data, null, 2));
+        this.log(`Backup realizado: ${backupFile}`);
+        
+        // Manter apenas últimos 10 backups
+        const backups = fs.readdirSync(backupDir).sort();
+        if (backups.length > 10) {
+            backups.slice(0, backups.length - 10).forEach(b => {
+                fs.unlinkSync(path.join(backupDir, b));
+            });
+        }
+        
+        return backupFile;
     }
 }
 
