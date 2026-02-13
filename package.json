@@ -10,7 +10,7 @@
     "@whiskeysockets/baileys": "^6.6.0",
     "pino": "^8.17.0"
   },
-  "engines": {A
+  "engines": {
     "node": ">=18.0.0"
   }
 }
