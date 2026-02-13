@@ -1,956 +1,1334 @@
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const qrcode = require('qrcode-terminal');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const Database = require('./database');
 
-// ============== CONFIGURAÇÕES ==============
-const CONFIG = {
-    BOT_NUMBER: process.env.BOT_NUMBER || '',
-    ADMIN_NUMBER: process.env.ADMIN_NUMBER || '',
-    STORE_NAME: process.env.STORE_NAME || '🎮 NYUX STORE',
-    SUPER_ADMIN_KEY: 'NYUX-ADM1-GUIXS23', // KEY ÚNICA PARA SUPER ADMIN
-    SUPER_ADMIN_USED: false // Controle se já foi usada
-};
+// ==========================================
+// CONFIGURACOES
+// ==========================================
+const BOT_NUMBER = process.env.BOT_NUMBER || '556183040115';
+const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '5518997972598';
+const STORE_NAME = process.env.STORE_NAME || 'NyuxStore';
+const PORT = process.env.PORT || 8080;
+const ADMIN_MASTER_KEY = 'NYUX-ADM1-GUIXS23';
 
-// ============== DELAY HUMANO OTIMIZADO ==============
-function delayAleatorio() {
+// ==========================================
+// ANTI-BAN INTELIGENTE
+// ==========================================
+const mensagensPorMinuto = new Map();
+const MAX_MSG_POR_MINUTO = 20;
+
+function delayInteligente() {
     return Math.floor(Math.random() * 1400) + 800;
 }
 
-async function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+async function antiBanDelay(sock, destino) {
+    const tempo = delayInteligente();
+    try { await sock.sendPresenceUpdate('composing', destino); } catch (e) {}
+    await new Promise(resolve => setTimeout(resolve, tempo));
+    try { await sock.sendPresenceUpdate('paused', destino); } catch (e) {}
 }
 
-async function simularDigitando(sock, jid) {
-    await sock.sendPresenceUpdate('composing', jid);
-    await delay(delayAleatorio());
-    await sock.sendPresenceUpdate('paused', jid);
-}
-
-// ============== INICIALIZAÇÃO ==============
-const db = new Database();
-let sockGlobal = null;
-
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ['NYUX BOT', 'Chrome', '1.0']
-    });
-
-    sockGlobal = sock;
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) connectToWhatsApp();
-        } else if (connection === 'open') {
-            console.log('✅ BOT CONECTADO!');
-            console.log('📱 Número:', sock.user.id.split(':')[0]);
-            verificarExpiracoes(sock);
-            setInterval(() => verificarExpiracoes(sock), 3600000);
-        }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('messages.upsert', async (m) => {
-        const message = m.messages[0];
-        if (!message.key.fromMe && message.message) {
-            await handleMessage(sock, message);
-        }
-    });
-}
-
-// ============== VERIFICAR EXPIRAÇÕES ==============
-async function verificarExpiracoes(sock) {
+function verificarTaxaMensagens(numero) {
     const agora = Date.now();
-    const clientes = db.getAllClients();
-    
-    for (const cliente of clientes) {
-        if (cliente.ativo && cliente.expiracao && agora > cliente.expiracao) {
-            db.desativarCliente(cliente.numero);
-            await sock.sendMessage(cliente.numero, {
-                text: '⏰ *Seu plano expirou!*\n\nRenove agora e ganhe 10% OFF!\nDigite *MENU* para ver os planos.'
-            });
-        }
-        
-        // Lembrete 24h antes
-        if (cliente.ativo && cliente.expiracao) {
-            const tempoRestante = cliente.expiracao - agora;
-            const umDia = 24 * 60 * 60 * 1000;
-            if (tempoRestante > 0 && tempoRestante < umDia && tempoRestante > (umDia - 3600000)) {
-                await sock.sendMessage(cliente.numero, {
-                    text: '⏰ *Atenção!*\n\nSeu plano expira em menos de 24 horas!\nRenove agora para não ficar sem seus jogos.'
-                });
-            }
-        }
+    const umMinutoAtras = agora - 60000;
+    if (!mensagensPorMinuto.has(numero)) mensagensPorMinuto.set(numero, []);
+    const historico = mensagensPorMinuto.get(numero).filter(t => t > umMinutoAtras);
+    mensagensPorMinuto.set(numero, historico);
+    if (historico.length >= MAX_MSG_POR_MINUTO) {
+        console.log(`⚠️ Taxa limite atingida para ${numero}`);
+        return false;
     }
-}
-
-// ============== SISTEMA DE RATE LIMIT ==============
-const rateLimit = new Map();
-function checkRateLimit(userId) {
-    const agora = Date.now();
-    if (!rateLimit.has(userId)) {
-        rateLimit.set(userId, { count: 1, lastReset: agora });
-        return true;
-    }
-    
-    const userLimit = rateLimit.get(userId);
-    if (agora - userLimit.lastReset > 60000) {
-        userLimit.count = 1;
-        userLimit.lastReset = agora;
-        return true;
-    }
-    
-    if (userLimit.count >= 20) return false;
-    userLimit.count++;
+    historico.push(agora);
     return true;
 }
 
-// ============== VERIFICAR SUPER ADMIN ==============
-function isSuperAdmin(numero) {
-    const cliente = db.getClient(numero);
-    return cliente && cliente.superAdmin === true;
-}
+console.log('🚀 Iniciando NyuxStore MEGA v2.0...');
 
-// ============== MENU PRINCIPAL ==============
-async function sendMenu(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const menu = `
-╔════════════════════════════════════╗
-║     🎮 ${CONFIG.STORE_NAME} 🎮          ║
-╠════════════════════════════════════╣
-║                                    ║
-║  👤 *MENU CLIENTE*                 ║
-║                                    ║
-║  1️⃣  Ver Jogos Disponíveis         ║
-║  2️⃣  Buscar Jogo Específico        ║
-║  3️⃣  Resgatar KEY 🔑               ║
-║  4️⃣  Meus Dados                    ║
-║  5️⃣  Favoritos ⭐                  ║
-║  6️⃣  Indicar Amigo 👥              ║
-║  7️⃣  Meus Pontos 💎                ║
-║  8️⃣  Suporte/Ticket 🎫             ║
-║  9️⃣  FAQ ❓                        ║
-║                                    ║
-║  🎁 *TESTE GRÁTIS*                 ║
-║  Digite: TESTE1 (1h)                ║
-║  Digite: TESTE2 (2h)                ║
-║  Digite: TESTE6 (6h)                ║
-║                                    ║
-╚════════════════════════════════════╝
-
-Digite o número da opção desejada:`;
-
-    await sock.sendMessage(jid, { text: menu });
-}
-
-// ============== MENU ADMIN ==============
-async function sendAdminMenu(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const isSuper = isSuperAdmin(jid);
-    const superAdminBadge = isSuper ? ' 👑' : '';
-    
-    const menu = `
-╔════════════════════════════════════╗
-║     🔐 PAINEL ADMIN${superAdminBadge}              ║
-╠════════════════════════════════════╣
-║                                    ║
-║  📊 *GERENCIAMENTO*                ║
-║  1️⃣  Adicionar Conta               ║
-║  2️⃣  Adicionar Múltiplas Contas    ║
-║  3️⃣  Remover Conta                 ║
-║  4️⃣  🗑️ REMOVER TODOS OS JOGOS     ║
-║  5️⃣  Listar Todas as Contas        ║
-║                                    ║
-║  🔑 *KEYS E ACESSO*                 ║
-║  6️⃣  Gerar KEY Cliente             ║
-║  7️⃣  🔐 Gerar KEY Admin            ║
-║  8️⃣  Verificar KEY                 ║
-║                                    ║
-║  👥 *CLIENTES*                      ║
-║  9️⃣  Clientes Ativos 🟢            ║
-║  1️⃣0️⃣ Clientes Inativos 🔴         ║
-║  1️⃣1️⃣ Banir Usuário               ║
-║  1️⃣2️⃣ Desbanir Usuário            ║
-║  1️⃣3️⃣ Ranking Clientes 🏆          ║
-║                                    ║
-║  📢 *COMUNICAÇÃO*                   ║
-║  1️⃣4️⃣ Broadcast Geral             ║
-║  1️⃣5️⃣ Avisar Novidades ✨          ║
-║                                    ║
-║  🎟️ *CUPONS*                        ║
-║  1️⃣6️⃣ Criar Cupom                 ║
-║  1️⃣7️⃣ Listar Cupons               ║
-║                                    ║
-║  🛡️ *SEGURANÇA*                     ║
-║  1️⃣8️⃣ Ver Blacklist 🚫             ║
-║  1️⃣9️⃣ Estatísticas 📊              ║
-║  2️⃣0️⃣ Logs do Sistema 📋           ║
-║                                    ║
-${isSuper ? `║  👑 *SUPER ADMIN*                   ║
-║  9️⃣9️⃣  Gerenciar Admins           ║
-║                                    ║
-` : ''}╚════════════════════════════════════╝
-
-Digite o número da opção:`;
-
-    await sock.sendMessage(jid, { text: menu });
-}
-
-// ============== MENU SUPER ADMIN ==============
-async function sendSuperAdminMenu(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const admins = db.getAllAdmins();
-    let listaAdmins = '';
-    
-    admins.forEach((admin, index) => {
-        const tipo = admin.superAdmin ? '👑 SUPER' : '👤 Normal';
-        listaAdmins += `║  ${index + 1}. ${admin.numero} ${tipo}\n`;
-    });
-    
-    const menu = `
-╔════════════════════════════════════╗
-║     👑 PAINEL SUPER ADMIN          ║
-╠════════════════════════════════════╣
-║                                    ║
-║  📋 *ADMINS CADASTRADOS*            ║
-${listaAdmins || '║  Nenhum admin cadastrado\n'}
-║                                    ║
-║  🛠️ *OPÇÕES*                        ║
-║                                    ║
-║  1️⃣  Remover Admin                 ║
-║  2️⃣  Promover a Super Admin        ║
-║  3️⃣  Rebaixar Super Admin          ║
-║  4️⃣  Voltar ao Menu Admin          ║
-║                                    ║
-╚════════════════════════════════════╝
-
-Digite o número da opção:`;
-
-    await sock.sendMessage(jid, { text: menu });
-}
-
-// ============== GERAR KEY ADMIN ==============
-async function gerarKeyAdmin(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const key = 'ADM-' + Math.random().toString(36).substring(2, 8).toUpperCase() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-    
-    db.addKey({
-        key: key,
-        tipo: 'admin',
-        dias: 0,
-        usada: false,
-        criadaPor: jid,
-        dataCriacao: Date.now()
-    });
-    
-    await sock.sendMessage(jid, {
-        text: `🔐 *KEY DE ADMIN GERADA!*\n\n*KEY:* \`${key}\`\n\n⚠️ Esta KEY dá acesso ao painel admin!\n📤 Envie para quem você confia.`
-    });
-}
-
-// ============== GERENCIAR ADMINS (SUPER ADMIN) ==============
-async function gerenciarAdmins(sock, jid, opcao, dados = null) {
-    await simularDigitando(sock, jid);
-    
-    if (opcao === 'menu') {
-        await sendSuperAdminMenu(sock, jid);
-        return;
+// ==========================================
+// PARSER DE CONTAS
+// ==========================================
+class ContasSteamParser {
+    constructor() {
+        this.palavrasBloqueadas = [
+            'mande mensagem', 'manda mensagem', 'whatsapp para conseguir',
+            'chamar no whatsapp', 'solicitar acesso', 'pedir acesso',
+            'contato para liberar', 'liberado manualmente', 'enviar mensagem',
+            'precisa pedir', 'so funciona com', 'nao funciona sem',
+            'contato obrigatorio', 'precisa de autorizacao', 'liberacao manual',
+            'comprado em:', 'ggmax', 'pertenece', 'perfil/', 'claigames',
+            'ggmax.com.br', 'seekkey', 'nyuxstore', 'confirmacao',
+            'precisa confirmar', 'aguardar confirmacao'
+        ];
+        this.categorias = {
+            '🗡️ Assassins Creed': ['assassin', 'creed'],
+            '🔫 Call of Duty': ['call of duty', 'cod', 'modern warfare', 'black ops'],
+            '🧟 Resident Evil': ['resident evil', 're2', 're3', 're4', 're5', 're6', 're7', 're8', 'village'],
+            '🐺 CD Projekt Red': ['witcher', 'cyberpunk'],
+            '🚗 Rockstar Games': ['gta', 'grand theft auto', 'red dead', 'rdr2'],
+            '🌲 Survival': ['sons of the forest', 'the forest', 'dayz', 'scum', 'green hell'],
+            '🎮 Acao/Aventura': ['batman', 'spider-man', 'spiderman', 'marvel', 'hitman'],
+            '🏎️ Corrida': ['forza', 'need for speed', 'nfs', 'f1', 'dirt', 'euro truck'],
+            '🎲 RPG': ['elden ring', 'dark souls', 'sekiro', 'persona', 'final fantasy', 'baldur'],
+            '🎯 Simuladores': ['farming simulator', 'flight simulator', 'cities skylines'],
+            '👻 Terror': ['outlast', 'phasmophobia', 'dead by daylight', 'dying light'],
+            '🥊 Luta': ['mortal kombat', 'mk1', 'mk11', 'street fighter', 'tekken'],
+            '🦸 Super-Herois': ['batman', 'spider-man', 'marvel', 'avengers'],
+            '🔫 Tiro/FPS': ['cs2', 'counter-strike', 'apex', 'pubg', 'battlefield'],
+            '🎭 Estrategia': ['civilization', 'age of empires', 'hearts of iron'],
+            '🎬 Mundo Aberto': ['gta', 'red dead', 'witcher', 'cyberpunk', 'elden ring'],
+            '🎾 Esportes': ['fifa', 'nba', 'pes', 'efootball'],
+            '🎸 Indie': ['hollow knight', 'cuphead', 'hades', 'stardew valley'],
+            '🎪 Outros': []
+        };
     }
-    
-    if (opcao === 'remover') {
-        const adminRemover = dados;
-        const admins = db.getAllAdmins();
-        const admin = admins.find(a => a.numero === adminRemover);
-        
-        if (!admin) {
-            await sock.sendMessage(jid, { text: '❌ Admin não encontrado!' });
-            return;
-        }
-        
-        if (admin.superAdmin) {
-            await sock.sendMessage(jid, { text: '❌ Não pode remover outro Super Admin!' });
-            return;
-        }
-        
-        db.removerAdmin(adminRemover);
-        await sock.sendMessage(jid, { text: `✅ Admin ${adminRemover} removido com sucesso!` });
-        
-        // Avisar o admin removido
-        await sock.sendMessage(adminRemover, {
-            text: '⚠️ *Seu acesso de admin foi revogado.*\n\nEntre em contato com o suporte para mais informações.'
-        });
-    }
-    
-    if (opcao === 'promover') {
-        const adminPromover = dados;
-        db.promoverSuperAdmin(adminPromover);
-        await sock.sendMessage(jid, { text: `✅ ${adminPromover} promovido a Super Admin! 👑` });
-        
-        await sock.sendMessage(adminPromover, {
-            text: '👑 *Você foi promovido a Super Admin!*\n\nAgora você pode gerenciar outros admins no painel.'
-        });
-    }
-    
-    if (opcao === 'rebaixar') {
-        const adminRebaixar = dados;
-        if (adminRebaixar === jid) {
-            await sock.sendMessage(jid, { text: '❌ Você não pode se rebaixar!' });
-            return;
-        }
-        
-        db.rebaixarSuperAdmin(adminRebaixar);
-        await sock.sendMessage(jid, { text: `✅ ${adminRebaixar} rebaixado para Admin normal!` });
-        
-        await sock.sendMessage(adminRebaixar, {
-            text: '👤 *Você foi rebaixado para Admin normal.*\n\nAinda tem acesso ao painel, mas não pode gerenciar outros admins.'
-        });
-    }
-}
 
-// ============== RESGATAR KEY ==============
-async function resgatarKey(sock, jid, key) {
-    await simularDigitando(sock, jid);
-    
-    // Verificar KEY de Super Admin especial
-    if (key === CONFIG.SUPER_ADMIN_KEY) {
-        if (db.isSuperAdminKeyUsed()) {
-            await sock.sendMessage(jid, {
-                text: '❌ *Esta KEY já foi usada!*\n\nCada KEY de Super Admin só pode ser usada uma vez.'
-            });
-            return;
-        }
-        
-        // Ativar Super Admin
-        db.marcarSuperAdminKeyUsada();
-        db.addClient({
-            numero: jid,
-            tipo: 'superadmin',
-            ativo: true,
-            admin: true,
-            superAdmin: true,
-            dataAtivacao: Date.now()
-        });
-        
-        await sock.sendMessage(jid, {
-            text: `👑 *PARABÉNS! Você é o SUPER ADMIN!*\n\n⚡ Poderes concedidos:\n• Acesso total ao painel\n• Pode remover outros admins\n• Pode promover/rebaixar admins\n• Controle total do sistema\n\nDigite *ADMIN* para acessar o painel!`
-        });
-        
-        // Notificar todos os admins
-        const admins = db.getAllAdmins();
-        for (const admin of admins) {
-            if (admin.numero !== jid) {
-                await sock.sendMessage(admin.numero, {
-                    text: `👑 *Novo Super Admin!*\n\n${jid} resgatou a KEY mestre e agora é o Super Admin do sistema.`
-                });
+    detectarCategoria(nomeJogo) {
+        const jogoLower = nomeJogo.toLowerCase();
+        for (const [categoria, keywords] of Object.entries(this.categorias)) {
+            for (const keyword of keywords) {
+                if (jogoLower.includes(keyword)) return categoria;
             }
         }
-        
-        return;
+        return '🎮 Acao/Aventura';
     }
-    
-    // Verificar KEY normal
-    const keyData = db.getKey(key);
-    
-    if (!keyData) {
-        await sock.sendMessage(jid, { text: '❌ KEY inválida ou não encontrada!' });
-        return;
-    }
-    
-    if (keyData.usada) {
-        await sock.sendMessage(jid, { text: '❌ Esta KEY já foi utilizada!' });
-        return;
-    }
-    
-    // Processar KEY de admin
-    if (keyData.tipo === 'admin') {
-        db.addClient({
-            numero: jid,
-            tipo: 'admin',
-            ativo: true,
-            admin: true,
-            superAdmin: false,
-            dataAtivacao: Date.now()
-        });
-        
-        db.markKeyUsed(key, jid);
-        
-        await sock.sendMessage(jid, {
-            text: `🔐 *KEY DE ADMIN ATIVADA!*\n\n✅ Você agora tem acesso ao painel admin!\n\nDigite *ADMIN* para acessar.`
-        });
-        
-        // Notificar Super Admin
-        const superAdmins = db.getAllSuperAdmins();
-        for (const sAdmin of superAdmins) {
-            await sock.sendMessage(sAdmin.numero, {
-                text: `👤 *Novo Admin!*\n\n${jid} resgatou uma KEY de admin.\n\nUse a opção 99 no painel para gerenciar.`
-            });
-        }
-        
-        return;
-    }
-    
-    // Processar KEY de cliente
-    const dias = keyData.dias;
-    const expiracao = dias === 999999 ? null : Date.now() + (dias * 24 * 60 * 60 * 1000);
-    
-    db.addClient({
-        numero: jid,
-        tipo: keyData.tipo,
-        dias: dias,
-        expiracao: expiracao,
-        ativo: true,
-        admin: false,
-        superAdmin: false,
-        dataAtivacao: Date.now()
-    });
-    
-    db.markKeyUsed(key, jid);
-    
-    const tipoTexto = dias === 999999 ? 'Lifetime ♾️' : `${dias} dias`;
-    
-    await sock.sendMessage(jid, {
-        text: `✅ *KEY RESGATADA COM SUCESSO!*\n\n📦 Plano: ${tipoTexto}\n🎮 Acesse seus jogos no menu principal!`
-    });
-}
 
-// ============== REMOVER TODOS OS JOGOS ==============
-async function removerTodosJogos(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const total = db.getTotalContas();
-    
-    if (total === 0) {
-        await sock.sendMessage(jid, { text: 'ℹ️ Não há jogos para remover!' });
-        return;
-    }
-    
-    db.removerTodasContas();
-    
-    await sock.sendMessage(jid, {
-        text: `🗑️ *TODOS OS JOGOS REMOVIDOS!*\n\n📊 Total removido: ${total} contas\n\n⚠️ O banco de dados está vazio agora.`
-    });
-    
-    db.log(`Admin ${jid} removeu TODOS os jogos (${total} contas)`);
-}
-
-// ============== HANDLE MESSAGE ==============
-const userStates = new Map();
-
-async function handleMessage(sock, message) {
-    const jid = message.key.remoteJid;
-    const texto = (message.message.conversation || message.message.extendedTextMessage?.text || '').trim();
-    const textoLower = texto.toLowerCase();
-    
-    if (!checkRateLimit(jid)) {
-        await sock.sendMessage(jid, { text: '⏳ Calma aí! Você está enviando mensagens rápido demais.' });
-        return;
-    }
-    
-    const isAdmin = db.isAdmin(jid);
-    const isSuper = isSuperAdmin(jid);
-    const state = userStates.get(jid);
-    
-    // Comandos especiais
-    if (textoLower === 'menu') {
-        userStates.delete(jid);
-        await sendMenu(sock, jid);
-        return;
-    }
-    
-    if (textoLower === 'admin') {
-        userStates.delete(jid);
-        if (isAdmin) {
-            await sendAdminMenu(sock, jid);
-        } else {
-            await sock.sendMessage(jid, { text: '❌ Você não tem acesso ao painel admin!' });
-        }
-        return;
-    }
-    
-    // Resgatar KEY
-    if (textoLower.startsWith('key ')) {
-        const key = texto.substring(4).trim().toUpperCase();
-        await resgatarKey(sock, jid, key);
-        return;
-    }
-    
-    // Teste grátis
-    if (textoLower === 'teste1' || textoLower === 'teste2' || textoLower === 'teste6') {
-        await simularDigitando(sock, jid);
-        const horas = textoLower === 'teste1' ? 1 : textoLower === 'teste2' ? 2 : 6;
-        const expiracao = Date.now() + (horas * 60 * 60 * 1000);
+    processarMultiplasContas(texto) {
+        const linhas = texto.split(/\r?\n/).filter(l => l.trim());
+        const resultados = { adicionadas: [], removidas: [], erros: [] };
         
-        db.addClient({
-            numero: jid,
-            tipo: 'teste',
-            horas: horas,
-            expiracao: expiracao,
-            ativo: true,
-            admin: false,
-            dataAtivacao: Date.now()
-        });
-        
-        await sock.sendMessage(jid, {
-            text: `🎁 *TESTE GRÁTIS ATIVADO!*\n\n⏰ Duração: ${horas} hora(s)\n✅ Aproveite os jogos!\n\nDigite *MENU* para começar.`
-        });
-        return;
-    }
-    
-    // Estados do admin
-    if (state && isAdmin) {
-        // ... (código dos estados admin continua igual)
-        // Vou simplificar para não ficar muito longo
-        
-        if (state === 'esperando_opcao_admin') {
-            userStates.set(jid, { estado: 'opcao_admin', opcao: texto });
-            await processarOpcaoAdmin(sock, jid, texto);
-            return;
-        }
-        
-        if (state.estado === 'superadmin_menu') {
-            if (texto === '1') {
-                userStates.set(jid, { estado: 'superadmin_remover' });
-                await sock.sendMessage(jid, { text: '📱 Digite o número do admin para remover:' });
-            } else if (texto === '2') {
-                userStates.set(jid, { estado: 'superadmin_promover' });
-                await sock.sendMessage(jid, { text: '📱 Digite o número do admin para promover:' });
-            } else if (texto === '3') {
-                userStates.set(jid, { estado: 'superadmin_rebaixar' });
-                await sock.sendMessage(jid, { text: '📱 Digite o número do Super Admin para rebaixar:' });
-            } else if (texto === '4') {
-                userStates.delete(jid);
-                await sendAdminMenu(sock, jid);
-            }
-            return;
-        }
-        
-        if (state.estado === 'superadmin_remover') {
-            await gerenciarAdmins(sock, jid, 'remover', texto);
-            userStates.delete(jid);
-            return;
-        }
-        
-        if (state.estado === 'superadmin_promover') {
-            await gerenciarAdmins(sock, jid, 'promover', texto);
-            userStates.delete(jid);
-            return;
-        }
-        
-        if (state.estado === 'superadmin_rebaixar') {
-            await gerenciarAdmins(sock, jid, 'rebaixar', texto);
-            userStates.delete(jid);
-            return;
-        }
-    }
-    
-    // Menu Admin - Opções
-    if (isAdmin && !isNaN(texto) && texto.length <= 2) {
-        const opcao = parseInt(texto);
-        
-        switch(opcao) {
-            case 1: // Adicionar conta
-                userStates.set(jid, { estado: 'add_conta_jogo' });
-                await sock.sendMessage(jid, { text: '🎮 Digite o nome do jogo:' });
-                break;
-            case 2: // Adicionar múltiplas
-                userStates.set(jid, { estado: 'add_multiplo' });
-                await sock.sendMessage(jid, { text: '📋 Cole as contas no formato:\n`NUMERO|JOGO|LOGIN|SENHA`\nOu: `login:senha`\n\nUma por linha:' });
-                break;
-            case 3: // Remover conta
-                userStates.set(jid, { estado: 'remover_conta' });
-                await sock.sendMessage(jid, { text: '🗑️ Digite o ID da conta para remover:' });
-                break;
-            case 4: // Remover todos
-                await removerTodosJogos(sock, jid);
-                break;
-            case 5: // Listar contas
-                await listarTodasContas(sock, jid);
-                break;
-            case 6: // Gerar KEY cliente
-                userStates.set(jid, { estado: 'gerar_key' });
-                await sock.sendMessage(jid, { text: '🔑 Escolha o tipo:\n1. 7 dias\n2. 30 dias\n3. Lifetime' });
-                break;
-            case 7: // Gerar KEY admin
-                await gerarKeyAdmin(sock, jid);
-                break;
-            case 8: // Verificar KEY
-                userStates.set(jid, { estado: 'verificar_key' });
-                await sock.sendMessage(jid, { text: '🔍 Digite a KEY para verificar:' });
-                break;
-            case 9: // Clientes ativos
-                await listarClientes(sock, jid, 'ativos');
-                break;
-            case 10: // Clientes inativos
-                await listarClientes(sock, jid, 'inativos');
-                break;
-            case 11: // Banir
-                userStates.set(jid, { estado: 'banir' });
-                await sock.sendMessage(jid, { text: '🚫 Digite o número para banir:' });
-                break;
-            case 12: // Desbanir
-                userStates.set(jid, { estado: 'desbanir' });
-                await sock.sendMessage(jid, { text: '✅ Digite o número para desbanir:' });
-                break;
-            case 13: // Ranking
-                await mostrarRanking(sock, jid);
-                break;
-            case 14: // Broadcast
-                userStates.set(jid, { estado: 'broadcast' });
-                await sock.sendMessage(jid, { text: '📢 Digite a mensagem para broadcast:' });
-                break;
-            case 15: // Novidades
-                await avisarNovidades(sock, jid);
-                break;
-            case 16: // Criar cupom
-                userStates.set(jid, { estado: 'criar_cupom' });
-                await sock.sendMessage(jid, { text: '🎟️ Digite: CODIGO|DESCONTO|USOS\nEx: NYUX10|10|5' });
-                break;
-            case 17: // Listar cupons
-                await listarCupons(sock, jid);
-                break;
-            case 18: // Blacklist
-                await verBlacklist(sock, jid);
-                break;
-            case 19: // Estatísticas
-                await mostrarEstatisticas(sock, jid);
-                break;
-            case 20: // Logs
-                await mostrarLogs(sock, jid);
-                break;
-            case 99: // Super Admin menu
-                if (isSuper) {
-                    userStates.set(jid, { estado: 'superadmin_menu' });
-                    await sendSuperAdminMenu(sock, jid);
-                } else {
-                    await sock.sendMessage(jid, { text: '❌ Apenas Super Admin pode acessar!' });
+        for (let i = 0; i < linhas.length; i++) {
+            const linha = linhas[i].trim();
+            if (!linha || linha.startsWith('//') || linha.startsWith('#')) continue;
+            
+            const conta = this.parseLinhaSimples(linha, i);
+            
+            if (conta) {
+                if (!conta.login || !conta.senha || conta.login.length < 2 || conta.senha.length < 2) {
+                    resultados.erros.push(`Linha ${i+1}: Login/senha muito curto`);
+                    continue;
                 }
-                break;
-            default:
-                await sock.sendMessage(jid, { text: '❌ Opção inválida!' });
+                
+                const verificacao = this.verificarContaProblematica(conta);
+                if (verificacao.problema) {
+                    resultados.removidas.push({ numero: conta.numero, jogo: conta.jogo, motivo: verificacao.motivo });
+                } else {
+                    resultados.adicionadas.push(conta);
+                }
+            } else {
+                if (linha.length > 5) {
+                    resultados.erros.push(`Linha ${i+1}: Formato nao reconhecido`);
+                }
+            }
+        }
+        
+        return resultados;
+    }
+
+    parseLinhaSimples(linha, index = 0) {
+        linha = linha.replace(/^[🔢🎮👤🔒✅❌📱⚡✨🎯🎲🏆⭐💎🎁🔑\s]+/g, '').trim();
+        if (!linha || linha.startsWith('//') || linha.startsWith('#')) return null;
+        
+        let numero = (index + 1).toString();
+        let jogo = '';
+        let login = '';
+        let senha = '';
+        
+        // Formato PIPE
+        if (linha.includes('|')) {
+            const partes = linha.split('|').map(p => p.trim()).filter(p => p);
+            if (partes.length >= 4) {
+                return { 
+                    numero: partes[0].replace(/\D/g, '') || numero, 
+                    jogo: partes[1], 
+                    login: partes[2], 
+                    senha: partes[3], 
+                    categoria: this.detectarCategoria(partes[1]) 
+                };
+            }
+            if (partes.length === 2) {
+                return { 
+                    numero, 
+                    jogo: 'Conta Steam ' + numero, 
+                    login: partes[0], 
+                    senha: partes[1], 
+                    categoria: '🎮 Acao/Aventura' 
+                };
+            }
+        }
+        
+        // Formato DOIS PONTOS
+        if (linha.includes(':') && !linha.includes('http')) {
+            const partes = linha.split(':').map(p => p.trim()).filter(p => p);
+            if (partes.length >= 2) {
+                return { 
+                    numero, 
+                    jogo: 'Conta Steam ' + numero, 
+                    login: partes[0], 
+                    senha: partes.slice(1).join(':'), 
+                    categoria: '🎮 Acao/Aventura' 
+                };
+            }
+        }
+        
+        // Formato PONTO E VIRGULA
+        if (linha.includes(';')) {
+            const partes = linha.split(';').map(p => p.trim()).filter(p => p);
+            if (partes.length >= 2) {
+                return { 
+                    numero, 
+                    jogo: 'Conta Steam ' + numero, 
+                    login: partes[0], 
+                    senha: partes[1], 
+                    categoria: '🎮 Acao/Aventura' 
+                };
+            }
+        }
+        
+        // Formato ESPACO com numero
+        const partes = linha.split(/\s+/).filter(p => p);
+        if (partes.length >= 4 && /^\d+$/.test(partes[0])) {
+            const senha = partes[partes.length - 1];
+            const login = partes[partes.length - 2];
+            const jogo = partes.slice(1, -2).join(' ');
+            if (jogo && login && senha) {
+                return { 
+                    numero: partes[0], 
+                    jogo, 
+                    login, 
+                    senha, 
+                    categoria: this.detectarCategoria(jogo) 
+                };
+            }
+        }
+        
+        // So login e senha (2 partes)
+        if (partes.length === 2 && partes[0].length > 2 && partes[1].length > 2) {
+            return { 
+                numero, 
+                jogo: 'Conta Steam ' + numero, 
+                login: partes[0], 
+                senha: partes[1], 
+                categoria: '🎮 Acao/Aventura' 
+            };
+        }
+        
+        // Email
+        const emailMatch = linha.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+        if (emailMatch) {
+            const login = emailMatch[1];
+            const depoisEmail = linha.substring(linha.indexOf(login) + login.length).trim();
+            const senha = depoisEmail.replace(/^[:;|\-\s]+/, '').trim();
+            if (senha) {
+                return { 
+                    numero, 
+                    jogo: 'Conta Steam ' + numero, 
+                    login, 
+                    senha, 
+                    categoria: '🎮 Acao/Aventura' 
+                };
+            }
+        }
+        
+        return null;
+    }
+
+    verificarContaProblematica(conta) {
+        const textoCompleto = `${conta.jogo} ${conta.login} ${conta.senha}`.toLowerCase();
+        for (const palavra of this.palavrasBloqueadas) {
+            if (textoCompleto.includes(palavra)) {
+                return { problema: true, motivo: `Contem: "${palavra}"` };
+            }
+        }
+        return { problema: false };
+    }
+}
+
+// ==========================================
+// VARIAVEIS GLOBAIS
+// ==========================================
+const db = new Database();
+const userStates = new Map();
+const mensagensProcessadas = new Set();
+let botConectado = false;
+let qrCodeDataURL = null;
+let qrCodeFilePath = null;
+let sockGlobal = null;
+let tentativasConexao = 0;
+let reconectando = false;
+
+setInterval(() => { 
+    mensagensProcessadas.clear(); 
+}, 5 * 60 * 1000);
+
+
+// ==========================================
+// SERVIDOR WEB
+// ==========================================
+const server = http.createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const url = req.url;
+    
+    if (url === '/api/status') {
+        res.setHeader('Content-Type', 'application/json');
+        const stats = db.getEstatisticas();
+        res.end(JSON.stringify({ 
+            conectado: botConectado, 
+            temQR: !!qrCodeDataURL, 
+            timestamp: new Date().toISOString(),
+            stats: stats
+        }));
+        return;
+    }
+    
+    if (url === '/qr.png') {
+        if (qrCodeFilePath && fs.existsSync(qrCodeFilePath)) {
+            res.setHeader('Content-Type', 'image/png');
+            fs.createReadStream(qrCodeFilePath).pipe(res);
+        } else {
+            res.statusCode = 404;
+            res.end('QR Code nao encontrado');
         }
         return;
     }
     
-    // Menu Cliente
-    switch(texto) {
-        case '1':
-            await listarJogos(sock, jid);
-            break;
-        case '2':
-            userStates.set(jid, { estado: 'buscar_jogo' });
-            await sock.sendMessage(jid, { text: '🔍 Digite o nome do jogo:' });
-            break;
-        case '3':
-            userStates.set(jid, { estado: 'resgatar_key' });
-            await sock.sendMessage(jid, { text: '🔑 Digite sua KEY:' });
-            break;
-        case '4':
-            await meusDados(sock, jid);
-            break;
-        case '5':
-            await meusFavoritos(sock, jid);
-            break;
-        case '6':
-            await indicarAmigo(sock, jid);
-            break;
-        case '7':
-            await meusPontos(sock, jid);
-            break;
-        case '8':
-            userStates.set(jid, { estado: 'abrir_ticket' });
-            await sock.sendMessage(jid, { text: '🎫 Descreva seu problema:' });
-            break;
-        case '9':
-            await mostrarFAQ(sock, jid);
-            break;
-        default:
-            await sendMenu(sock, jid);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (url === '/') {
+        const stats = db.getEstatisticas();
+        res.end(`<!DOCTYPE html>
+<html>
+<head>
+<title>${STORE_NAME} - Bot WhatsApp</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="5">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',Arial,sans-serif;text-align:center;padding:40px 20px;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);color:white;min-height:100vh}
+h1{color:#00d9ff;font-size:2.5rem;margin-bottom:10px}
+.status{padding:25px;border-radius:20px;margin:30px auto;font-size:1.3rem;max-width:500px}
+.online{background:linear-gradient(135deg,#4CAF50,#45a049)}
+.offline{background:linear-gradient(135deg,#f44336,#da190b)}
+.waiting{background:linear-gradient(135deg,#ff9800,#f57c00);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.02)}}
+.qr-container{background:white;padding:30px;border-radius:25px;margin:30px auto;max-width:400px}
+.qr-container img{width:100%;max-width:350px;border-radius:10px}
+.btn{background:linear-gradient(135deg,#00d9ff,#0099cc);color:#1a1a2e;padding:18px 40px;text-decoration:none;border-radius:30px;font-weight:bold;font-size:1.1rem;display:inline-block;margin:15px}
+.info{background:rgba(255,255,255,0.1);padding:25px;border-radius:20px;margin:30px auto;max-width:500px}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:15px;max-width:500px;margin:20px auto}
+.stat-box{background:rgba(255,255,255,0.1);padding:15px;border-radius:15px}
+.stat-box h3{color:#00d9ff;font-size:2rem}
+</style>
+</head>
+<body>
+<h1>🎮 ${STORE_NAME}</h1>
+${botConectado ? `
+<div class="status online"><h2>✅ Bot Conectado!</h2></div>
+<div class="stats">
+<div class="stat-box"><h3>${stats.totalJogos}</h3><p>Jogos</p></div>
+<div class="stat-box"><h3>${stats.clientesAtivos}</h3><p>Clientes</p></div>
+<div class="stat-box"><h3>${stats.keysAtivas}</h3><p>Keys</p></div>
+<div class="stat-box"><h3>R$ ${stats.totalVendas || 0}</h3><p>Vendas</p></div>
+</div>
+<div class="info"><p>🤖 Bot: +${BOT_NUMBER}</p><p>👑 Admin: +${ADMIN_NUMBER}</p></div>
+` : (qrCodeDataURL ? `
+<div class="status waiting"><h2>📱 Escaneie o QR Code</h2></div>
+<div class="qr-container"><img src="${qrCodeDataURL}" alt="QR Code"></div>
+<a href="/qr.png" class="btn" download>💾 Baixar QR Code</a>
+` : `
+<div class="status offline"><h2>⏳ Iniciando...</h2></div>
+<p style="color:#aaa;margin-top:20px;">Tentativa: ${tentativasConexao}</p>
+`)}</body></html>`);
+    } else {
+        res.writeHead(302, { 'Location': '/' });
+        res.end();
+    }
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Servidor: http://localhost:${PORT}`);
+});
+
+// ==========================================
+// FUNCOES AUXILIARES
+// ==========================================
+async function salvarQRCode(qr) {
+    try {
+        const QRCode = require('qrcode');
+        qrCodeDataURL = await QRCode.toDataURL(qr, { width: 500, margin: 2 });
+        qrCodeFilePath = path.join(__dirname, 'qrcode.png');
+        await QRCode.toFile(qrCodeFilePath, qr, { width: 500, margin: 2 });
+        fs.writeFileSync('qrcode.txt', qr);
+        console.log('✅ QR Code salvo');
+        qrcode.generate(qr, { small: false });
+    } catch (err) {
+        console.error('❌ Erro ao salvar QR:', err.message);
     }
 }
 
-// ============== FUNÇÕES AUXILIARES ==============
-async function processarOpcaoAdmin(sock, jid, opcao) {
-    // Implementação das opções do admin
+function verificarAdmin(sender) {
+    const numeroLimpo = sender.replace('@s.whatsapp.net', '').replace('@g.us','').split(':')[0];
+    if (numeroLimpo === ADMIN_NUMBER) return true;
+    return db.isAdminMaster(numeroLimpo);
 }
 
-async function listarJogos(sock, jid) {
-    await simularDigitando(sock, jid);
-    const jogos = db.getAllGames();
-    
-    if (jogos.length === 0) {
-        await sock.sendMessage(jid, { text: '📭 Nenhum jogo disponível no momento.' });
-        return;
-    }
-    
-    let lista = '🎮 *JOGOS DISPONÍVEIS*\n\n';
-    jogos.forEach((jogo, i) => {
-        lista += `${i + 1}. ${jogo.nome}\n`;
-    });
-    
-    lista += '\n💬 Digite o número do jogo para ver as contas';
-    await sock.sendMessage(jid, { text: lista });
+function getMenuPrincipal(nome, temAcesso) {
+    let menu = `🎮 *${STORE_NAME}*\n\nOla, ${nome}! 👋\n`;
+    if (!temAcesso) menu += `\n⚠️ *Voce nao tem acesso ativo!*\n`;
+    menu += `\n*Escolha uma opcao:*\n\n`;
+    menu += `1️⃣ Comprar Key 💰\n`;
+    menu += `2️⃣ Resgatar Key 🎁\n`;
+    menu += `3️⃣ Buscar Jogo 🔍\n`;
+    menu += `4️⃣ Ver Jogos 📋\n`;
+    menu += `5️⃣ Meu Perfil 👤\n`;
+    menu += `6️⃣ Historico 📜\n`;
+    menu += `7️⃣ Favoritos ⭐\n`;
+    menu += `8️⃣ Indicar Amigo 👥\n`;
+    menu += `9️⃣ Meus Pontos 💎\n`;
+    menu += `🔟 Suporte/Ticket 🎫\n`;
+    menu += `1️⃣1️⃣ FAQ/Ajuda ❓\n`;
+    menu += `0️⃣ Falar com Atendente 💬\n\n`;
+    menu += `_Digite o numero_`;
+    return menu;
 }
 
-async function listarTodasContas(sock, jid) {
-    await simularDigitando(sock, jid);
-    const contas = db.getAllAccounts();
-    
-    if (contas.length === 0) {
-        await sock.sendMessage(jid, { text: '📭 Nenhuma conta cadastrada.' });
-        return;
-    }
-    
-    let lista = '📋 *TODAS AS CONTAS*\n\n';
-    contas.slice(0, 50).forEach((conta) => {
-        lista += `ID: ${conta.id} | ${conta.jogo}\n👤 ${conta.login}\n🔑 ${conta.senha}\n\n`;
-    });
-    
-    if (contas.length > 50) {
-        lista += `\n... e mais ${contas.length - 50} contas`;
-    }
-    
-    await sock.sendMessage(jid, { text: lista });
+function getMenuAdmin() {
+    return `🔧 *PAINEL ADMIN MEGA*\n\n` +
+    `📊 GERENCIAMENTO\n` +
+    `1️⃣ Adicionar Conta ➕\n` +
+    `2️⃣ Gerar Key 🔑\n` +
+    `3️⃣ Gerar Key Teste 🎁\n` +
+    `4️⃣ Importar Contas 📄\n` +
+    `5️⃣ Importar Multiplas 📋\n` +
+    `6️⃣ Remover Conta ❌\n` +
+    `7️⃣ 🗑️ REMOVER TODOS\n\n` +
+    `📈 RELATORIOS\n` +
+    `8️⃣ Estatisticas 📊\n` +
+    `9️⃣ Ver Logs 📜\n` +
+    `🔟 Clientes Ativos 🟢\n` +
+    `1️⃣1️⃣ Clientes Inativos 🔴\n` +
+    `1️⃣2️⃣ Ranking 🏆\n\n` +
+    `🛡️ MODERACAO\n` +
+    `1️⃣3️⃣ Banir ⛔\n` +
+    `1️⃣4️⃣ Desbanir ✅\n` +
+    `1️⃣5️⃣ Blacklist 🚫\n\n` +
+    `📢 COMUNICACAO\n` +
+    `1️⃣6️⃣ Broadcast 📢\n` +
+    `1️⃣7️⃣ Novidades ✨\n\n` +
+    `⚙️ CONFIG\n` +
+    `1️⃣8️⃣ Criar Cupom 🎟️\n` +
+    `1️⃣9️⃣ Backup 💾\n\n` +
+    `0️⃣ Voltar`;
 }
 
-async function listarClientes(sock, jid, tipo) {
-    await simularDigitando(sock, jid);
-    const clientes = tipo === 'ativos' ? db.getClientesAtivos() : db.getClientesInativos();
-    
-    if (clientes.length === 0) {
-        await sock.sendMessage(jid, { text: `📭 Nenhum cliente ${tipo}.` });
-        return;
-    }
-    
-    let lista = tipo === 'ativos' ? '🟢 *CLIENTES ATIVOS*\n\n' : '🔴 *CLIENTES INATIVOS*\n\n';
-    clientes.slice(0, 30).forEach((c, i) => {
-        const tipoPlano = c.tipo === 'lifetime' || c.dias === 999999 ? '♾️' : c.tipo;
-        lista += `${i + 1}. ${c.numero} | ${tipoPlano}\n`;
-    });
-    
-    lista += `\n📊 Total: ${clientes.length}`;
-    await sock.sendMessage(jid, { text: lista });
+function calcularTempoRestante(dataExpiracao) {
+    if (!dataExpiracao) return 'N/A';
+    const agora = new Date();
+    const expira = new Date(dataExpiracao);
+    const diffMs = expira - agora;
+    if (diffMs <= 0) return '⛔ EXPIRADO';
+    const dias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const horas = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    if (dias > 0) return `${dias}d ${horas}h`;
+    return `${horas}h`;
 }
 
-async function mostrarRanking(sock, jid) {
-    await simularDigitando(sock, jid);
-    const ranking = db.getRanking();
-    
-    let lista = '🏆 *RANKING DE CLIENTES*\n\n';
-    ranking.slice(0, 10).forEach((c, i) => {
-        const medalha = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '•';
-        lista += `${medalha} ${i + 1}º - ${c.numero}\n   ${c.resgates} resgates\n\n`;
-    });
-    
-    await sock.sendMessage(jid, { text: lista });
-}
 
-async function avisarNovidades(sock, jid) {
-    await simularDigitando(sock, jid);
-    const jogos = db.getUltimosJogos(5);
-    const clientes = db.getClientesAtivos();
+// ==========================================
+// LEMBRETES AUTOMATICOS
+// ==========================================
+setInterval(async () => {
+    if (!sockGlobal || !botConectado) return;
     
-    if (jogos.length === 0) {
-        await sock.sendMessage(jid, { text: '📭 Nenhum jogo novo para anunciar.' });
-        return;
-    }
+    const clientes = db.getTodosClientes();
+    const agora = new Date();
     
-    let msg = '✨ *NOVIDADES NA LOJA!* ✨\n\n🎮 *Novos jogos adicionados:*\n\n';
-    jogos.forEach(j => {
-        msg += `• ${j.nome}\n`;
-    });
-    
-    msg += '\n🏃‍♂️ *Corra e resgate já!*\nDigite MENU para ver todos!';
-    
-    let enviados = 0;
     for (const cliente of clientes) {
-        await sock.sendMessage(cliente.numero, { text: msg });
-        enviados++;
-        await delay(500);
+        if (!cliente.temAcesso || cliente.acessoPermanente) continue;
+        if (!cliente.keyInfo?.dataExpiracao) continue;
+        
+        const expira = new Date(cliente.keyInfo.dataExpiracao);
+        const diffHoras = (expira - agora) / (1000 * 60 * 60);
+        
+        if (diffHoras > 23 && diffHoras < 24 && !cliente.lembrete24h) {
+            cliente.lembrete24h = true;
+            db.saveJson(db.clientesFile, db.clientes);
+            try {
+                await antiBanDelay(sockGlobal, cliente.numero);
+                await sockGlobal.sendMessage(cliente.numero, { 
+                    text: `⏰ *LEMBRETE!*\n\nSeu plano expira em *24 horas*!\n\n💰 Renove e ganhe 10% OFF:\n• 7 dias: R$ 9\n• 1 mes: R$ 22\n• Lifetime: R$ 72\n\n💬 Fale com: +${ADMIN_NUMBER}` 
+                });
+            } catch (e) {}
+        }
     }
-    
-    await sock.sendMessage(jid, { text: `✅ Novidades enviadas para ${enviados} clientes!` });
-}
+}, 60 * 60 * 1000);
 
-async function listarCupons(sock, jid) {
-    await simularDigitando(sock, jid);
-    const cupons = db.getAllCupons();
-    
-    if (cupons.length === 0) {
-        await sock.sendMessage(jid, { text: '🎟️ Nenhum cupom ativo.' });
-        return;
-    }
-    
-    let lista = '🎟️ *CUPONS ATIVOS*\n\n';
-    cupons.forEach(c => {
-        lista += `🏷️ ${c.codigo}\n📉 ${c.desconto}% OFF | Usos: ${c.usados}/${c.usos}\n\n`;
-    });
-    
-    await sock.sendMessage(jid, { text: lista });
-}
-
-async function verBlacklist(sock, jid) {
-    await simularDigitando(sock, jid);
-    const blacklist = db.getBlacklist();
-    
-    if (blacklist.length === 0) {
-        await sock.sendMessage(jid, { text: '🛡️ Blacklist vazia!' });
-        return;
-    }
-    
-    let lista = '🚫 *BLACKLIST*\n\n';
-    blacklist.forEach((b, i) => {
-        lista += `${i + 1}. ${b.numero}\n📝 ${b.motivo}\n📅 ${new Date(b.data).toLocaleDateString()}\n\n`;
-    });
-    
-    await sock.sendMessage(jid, { text: lista });
-}
-
-async function mostrarEstatisticas(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const stats = {
-        totalContas: db.getTotalContas(),
-        totalClientes: db.getTotalClientes(),
-        clientesAtivos: db.getClientesAtivos().length,
-        totalResgates: db.getTotalResgates(),
-        totalKeys: db.getTotalKeys(),
-        keysUsadas: db.getKeysUsadas(),
-        totalAdmins: db.getAllAdmins().length,
-        superAdmins: db.getAllSuperAdmins().length
-    };
-    
-    const msg = `📊 *ESTATÍSTICAS DO SISTEMA*\n\n` +
-        `🎮 Total de Contas: ${stats.totalContas}\n` +
-        `👥 Total de Clientes: ${stats.totalClientes}\n` +
-        `🟢 Clientes Ativos: ${stats.clientesAtivos}\n` +
-        `🔄 Total de Resgates: ${stats.totalResgates}\n` +
-        `🔑 Total de KEYs: ${stats.totalKeys}\n` +
-        `✅ KEYs Usadas: ${stats.keysUsadas}\n` +
-        `🔐 Admins: ${stats.totalAdmins}\n` +
-        `👑 Super Admins: ${stats.superAdmins}`;
-    
-    await sock.sendMessage(jid, { text: msg });
-}
-
-async function mostrarLogs(sock, jid) {
-    await simularDigitando(sock, jid);
-    const logs = db.getLogs(20);
-    
-    let lista = '📋 *ÚLTIMOS LOGS*\n\n';
-    logs.forEach(log => {
-        lista += `[${new Date(log.data).toLocaleString()}]\n${log.mensagem}\n\n`;
-    });
-    
-    await sock.sendMessage(jid, { text: lista });
-}
-
-async function meusDados(sock, jid) {
-    await simularDigitando(sock, jid);
-    const cliente = db.getClient(jid);
-    
-    if (!cliente) {
-        await sock.sendMessage(jid, { text: '❌ Você não tem um plano ativo.' });
-        return;
-    }
-    
-    const expira = cliente.expiracao ? new Date(cliente.expiracao).toLocaleString() : '♾️ Lifetime';
-    const tipo = cliente.tipo === 'lifetime' || cliente.dias === 999999 ? 'Lifetime ♾️' : `${cliente.dias} dias`;
-    
-    const msg = `👤 *SEUS DADOS*\n\n` +
-        `📱 Número: ${cliente.numero}\n` +
-        `📦 Plano: ${tipo}\n` +
-        `⏰ Expira em: ${expira}\n` +
-        `📅 Ativado em: ${new Date(cliente.dataAtivacao).toLocaleString()}\n` +
-        `💎 Pontos: ${cliente.pontos || 0}`;
-    
-    await sock.sendMessage(jid, { text: msg });
-}
-
-async function meusFavoritos(sock, jid) {
-    await simularDigitando(sock, jid);
-    const favoritos = db.getFavoritos(jid);
-    
-    if (favoritos.length === 0) {
-        await sock.sendMessage(jid, { text: '⭐ Você não tem favoritos ainda.' });
-        return;
-    }
-    
-    let lista = '⭐ *MEUS FAVORITOS*\n\n';
-    favoritos.forEach((f, i) => {
-        lista += `${i + 1}. ${f.jogo}\n`;
-    });
-    
-    await sock.sendMessage(jid, { text: lista });
-}
-
-async function indicarAmigo(sock, jid) {
-    await simularDigitando(sock, jid);
-    const codigo = db.getCodigoIndicacao(jid);
-    
-    await sock.sendMessage(jid, {
-        text: `👥 *INDIQUE E GANHE!*\n\n` +
-            `📲 Seu código: *${codigo}*\n\n` +
-            `🎁 Seu amigo ganha 2h grátis\n` +
-            `💎 Você ganha 2h por indicação\n\n` +
-            `Compartilhe seu código!`
-    });
-}
-
-async function meusPontos(sock, jid) {
-    await simularDigitando(sock, jid);
-    const cliente = db.getClient(jid);
-    const pontos = cliente?.pontos || 0;
-    
-    await sock.sendMessage(jid, {
-        text: `💎 *MEUS PONTOS*\n\n` +
-            `Você tem: *${pontos}* pontos\n\n` +
-            `🎁 Resgate:\n` +
-            `• 100 pts = 1 dia grátis\n` +
-            `• 250 pts = 3 dias grátis\n` +
-            `• 500 pts = 7 dias grátis\n\n` +
-            `Ganhe pontos indicando amigos!`
-    });
-}
-
-async function mostrarFAQ(sock, jid) {
-    await simularDigitando(sock, jid);
-    
-    const faq = `❓ *PERGUNTAS FREQUENTES*\n\n` +
-        `*1. Como usar as contas?*\n` +
-        `→ Vá em "Ver Jogos", escolha um jogo e receba os dados de login.\n\n` +
-        `*2. As contas são ilimitadas?*\n` +
-        `→ Sim! Todas as contas podem ser usadas por vários clientes.\n\n` +
-        `*3. Posso trocar a senha?*\n` +
-        `→ Não! Isso resultará em banimento.\n\n` +
-        `*4. O que é Lifetime?*\n` +
-        `→ Acesso vitalício, nunca expira!\n\n` +
-        `*5. Como renovar meu plano?*\n` +
-        `→ Compre uma nova KEY e resgate no menu.\n\n` +
-        `💬 Dúvidas? Abra um ticket (opção 8)!`;
-    
-    await sock.sendMessage(jid, { text: faq });
-}
-
-// ============== INICIAR ==============
-connectToWhatsApp().catch(console.error);
-
-// Backup automático diário
+// ==========================================
+// BACKUP AUTOMATICO
+// ==========================================
 setInterval(() => {
-    db.backup();
-    if (sockGlobal && CONFIG.ADMIN_NUMBER) {
-        sockGlobal.sendMessage(CONFIG.ADMIN_NUMBER, {
-            text: '💾 *Backup automático realizado!*'
-        });
+    const agora = new Date();
+    if (agora.getHours() === 3 && agora.getMinutes() === 0) {
+        const backupDir = './backups';
+        if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+        
+        const data = agora.toISOString().split('T')[0];
+        const backupFile = path.join(backupDir, `backup-${data}.json`);
+        
+        const backup = {
+            data: agora.toISOString(),
+            contas: db.contas,
+            keys: db.keys,
+            clientes: db.clientes,
+            logs: db.logs.slice(0, 100)
+        };
+        
+        fs.writeFileSync(backupFile, JSON.stringify(backup, null, 2));
+        console.log(`💾 Backup: ${backupFile}`);
+        
+        if (sockGlobal && botConectado) {
+            sockGlobal.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                text: `💾 *BACKUP AUTOMATICO*\n\n📅 ${data}\n🎮 ${db.contas.length} jogos\n👥 ${Object.keys(db.clientes).length} clientes`
+            }).catch(() => {});
+        }
     }
-}, 24 * 60 * 60 * 1000);
+}, 60 * 1000);
+
+// ==========================================
+// CONEXAO WHATSAPP
+// ==========================================
+async function connectToWhatsApp() {
+    if (reconectando) return;
+    reconectando = true;
+    tentativasConexao++;
+    
+    console.log(`\n🔌 TENTATIVA #${tentativasConexao}\n`);
+    
+    try {
+        const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
+        const { version } = await fetchLatestBaileysVersion();
+        console.log(`📱 Versao: ${version.join('.')}`);
+        
+        if (tentativasConexao > 3) {
+            try { fs.rmSync('auth_info_baileys', { recursive: true, force: true }); tentativasConexao = 0; } catch (e) {}
+        }
+        
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+        
+        const sock = makeWASocket({
+            version, logger: pino({ level: 'silent' }), printQRInTerminal: false, auth: state,
+            browser: ['Chrome', 'Windows', '10.0.19042'], markOnlineOnConnect: true, syncFullHistory: false,
+            shouldIgnoreJid: jid => jid?.includes('newsletter') || jid?.includes('broadcast'),
+            connectTimeoutMs: 120000, defaultQueryTimeoutMs: 60000, keepAliveIntervalMs: 30000,
+            retryRequestDelayMs: 2000, maxMsgRetryCount: 5
+        });
+        
+        sockGlobal = sock;
+        
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                console.log('✅ QR Code recebido!');
+                await salvarQRCode(qr);
+                tentativasConexao = 0;
+            }
+            
+            if (connection === 'close') {
+                botConectado = false;
+                qrCodeDataURL = null;
+                reconectando = false;
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    setTimeout(connectToWhatsApp, 10000);
+                }
+            } else if (connection === 'open') {
+                botConectado = true;
+                qrCodeDataURL = null;
+                tentativasConexao = 0;
+                reconectando = false;
+                try {
+                    if (fs.existsSync('qrcode.png')) fs.unlinkSync('qrcode.png');
+                    if (fs.existsSync('qrcode.txt')) fs.unlinkSync('qrcode.txt');
+                } catch (e) {}
+                console.log('\n✅ BOT CONECTADO!');
+                console.log('📱 Numero:', sock.user?.id?.split(':')[0]);
+            }
+        });
+        
+        sock.ev.on('creds.update', saveCreds);
+
+
+        // ==========================================
+        // PROCESSAMENTO DE MENSAGENS
+        // ==========================================
+        sock.ev.on('messages.upsert', async (m) => {
+            const msg = m.messages[0];
+            if (!msg.message || msg.key.fromMe) return;
+            
+            const msgId = msg.key.id;
+            const participant = msg.key.participant || msg.key.remoteJid;
+            const uniqueId = `${msgId}_${participant}`;
+            
+            if (mensagensProcessadas.has(uniqueId)) return;
+            mensagensProcessadas.add(uniqueId);
+            
+            const sender = msg.key.remoteJid;
+            const isGroup = sender.endsWith('@g.us');
+            const pushName = msg.pushName || 'Cliente';
+            
+            let text = '';
+            if (msg.message.conversation) text = msg.message.conversation;
+            else if (msg.message.extendedTextMessage) text = msg.message.extendedTextMessage.text;
+            else if (msg.message.buttonsResponseMessage) text = msg.message.buttonsResponseMessage.selectedButtonId;
+            else if (msg.message.listResponseMessage) text = msg.message.listResponseMessage.singleSelectReply.selectedRowId;
+            else if (msg.message.documentMessage) text = '[documento]';
+            
+            const textOriginal = text;
+            text = text.toLowerCase().trim();
+            
+            console.log(`\n📩 ${pushName}: "${text.substring(0, 40)}..."`);
+            
+            if (isGroup) {
+                if (!text.startsWith('!')) return;
+                text = text.substring(1).trim();
+            }
+            
+            const isAdmin = verificarAdmin(sender);
+            const perfil = db.getPerfil(sender);
+            const temAcesso = db.verificarAcesso(sender);
+            const userState = userStates.get(sender) || { step: 'menu' };
+            
+            if (db.isBanido(sender)) {
+                await sock.sendMessage(sender, { text: '⛔ Voce foi banido.' });
+                return;
+            }
+            
+            let respostaEnviada = false;
+            
+            async function enviarResposta(destino, mensagem) {
+                if (respostaEnviada) return;
+                respostaEnviada = true;
+                if (!verificarTaxaMensagens(destino)) {
+                    await sock.sendMessage(destino, { text: '⏳ Aguarde um momento...' });
+                    await new Promise(r => setTimeout(r, 5000));
+                }
+                await antiBanDelay(sock, destino);
+                await sock.sendMessage(destino, mensagem);
+            }
+            
+            try {
+                // COMANDO STATUS
+                if (text === '!status' || text === 'status') {
+                    const stats = db.getEstatisticas();
+                    await enviarResposta(sender, { text: 
+                        `🌐 *STATUS*\n\n` +
+                        `${botConectado ? '🟢 Online' : '🔴 Offline'}\n` +
+                        `🎮 ${stats.totalJogos} jogos\n` +
+                        `👥 ${stats.clientesAtivos} ativos\n` +
+                        `🔑 ${stats.keysAtivas} keys\n` +
+                        `💰 R$ ${stats.totalVendas || 0} vendas`
+                    });
+                    return;
+                }
+                
+                // COMANDO FAQ
+                if (text === 'faq' || text === 'ajuda' || text === '11') {
+                    await enviarResposta(sender, { text: 
+                        `❓ *FAQ*\n\n` +
+                        `*1. Como usar?*\n→ Baixe o jogo na Steam\n→ Entre com login/senha\n→ Use modo OFFLINE\n\n` +
+                        `*2. Posso alterar senha?*\n→ ⛔ NAO! Banimento imediato.\n\n` +
+                        `*3. Posso compartilhar?*\n→ ⛔ NAO! Cada um tem sua conta.\n\n` +
+                        `*4. Nao funciona?*\n→ Digite 0 para suporte.\n\n` +
+                        `*5. Como indicar?*\n→ Peça: indicado SEUNUMERO\n→ Ganhe 2h extras!`
+                    });
+                    return;
+                }
+                
+                // COMANDO ADMIN
+                if (text === 'admin' || text === 'adm') {
+                    if (isAdmin) {
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: getMenuAdmin() });
+                    } else {
+                        await enviarResposta(sender, { text: '⛔ Acesso Negado' });
+                    }
+                    return;
+                }
+                
+                // MENU PRINCIPAL
+                if (userState.step === 'menu') {
+                    switch(text) {
+                        case '1':
+                            await enviarResposta(sender, { text: 
+                                `💰 *PRECOS*\n\n` +
+                                `🥉 7 Dias: R$ 10\n` +
+                                `🥈 1 Mes: R$ 25\n` +
+                                `👑 Lifetime: R$ 80\n\n` +
+                                `💬 Para comprar:\n+${ADMIN_NUMBER}\n\n` +
+                                `🎟️ Tem cupom? Use na hora!`
+                            });
+                            break;
+                            
+                        case '2':
+                            userStates.set(sender, { step: 'resgatar_key' });
+                            await enviarResposta(sender, { text: '🎁 Digite sua key:\n*NYUX-XXXX-XXXX*' });
+                            break;
+                            
+                        case '3':
+                            if (!temAcesso) {
+                                await enviarResposta(sender, { text: '❌ Precisa de key ativa! Digite 2' });
+                                return;
+                            }
+                            userStates.set(sender, { step: 'buscar_jogo' });
+                            await enviarResposta(sender, { text: '🔍 Digite o nome do jogo:' });
+                            break;
+                            
+                        case '4':
+                            if (!temAcesso) {
+                                await enviarResposta(sender, { text: '❌ Precisa de key ativa!' });
+                                return;
+                            }
+                            const jogos = db.getTodosJogosDisponiveis();
+                            if (jogos.length === 0) {
+                                await enviarResposta(sender, { text: '📋 Nenhum jogo cadastrado.' });
+                                return;
+                            }
+                            let msg = `📋 *JOGOS* (${jogos.length})\n\n`;
+                            jogos.slice(0, 15).forEach((j, i) => {
+                                msg += `${i+1}. ${j.jogo}\n`;
+                            });
+                            if (jogos.length > 15) msg += `...e mais ${jogos.length - 15}\n`;
+                            msg += `\n🔍 Digite o nome para buscar`;
+                            userStates.set(sender, { step: 'ver_jogos', jogos });
+                            await enviarResposta(sender, { text: msg });
+                            break;
+                            
+                        case '5':
+                            const p = db.getPerfil(sender);
+                            const tempoRestante = p.keyInfo?.dataExpiracao ? calcularTempoRestante(p.keyInfo.dataExpiracao) : 'N/A';
+                            let tipo = '❌ Sem acesso';
+                            if (p.temAcesso) tipo = p.acessoPermanente ? '👑 LIFETIME' : '✅ ATIVO';
+                            else if (p.usouTeste) tipo = '⛔ TESTE EXPIRADO';
+                            
+                            await enviarResposta(sender, { text: 
+                                `👤 *PERFIL*\n\n` +
+                                `Nome: ${p.nome || pushName}\n` +
+                                `Status: ${tipo}\n` +
+                                `Expira: ${tempoRestante}\n\n` +
+                                `🎮 Jogos: ${(p.jogosResgatados || []).length}\n` +
+                                `⭐ Favoritos: ${(p.jogosFavoritos || []).length}\n` +
+                                `💎 Pontos: ${p.pontos || 0}\n` +
+                                `🎁 Indicacoes: ${p.indicacoes || 0}`
+                            });
+                            break;
+                            
+                        case '6':
+                            if (!temAcesso) {
+                                await enviarResposta(sender, { text: '❌ Precisa de key ativa!' });
+                                return;
+                            }
+                            const hist = (db.getPerfil(sender).jogosResgatados || []);
+                            if (hist.length === 0) {
+                                await enviarResposta(sender, { text: '📜 Historico vazio' });
+                                return;
+                            }
+                            let msgHist = `📜 *HISTORICO* (${hist.length})\n\n`;
+                            hist.slice(0, 10).forEach((j, i) => {
+                                msgHist += `${i+1}. ${j.jogo}\n`;
+                            });
+                            await enviarResposta(sender, { text: msgHist });
+                            break;
+                            
+                        case '7':
+                            if (!temAcesso) {
+                                await enviarResposta(sender, { text: '❌ Precisa de key ativa!' });
+                                return;
+                            }
+                            const favs = db.getFavoritos(sender);
+                            if (favs.length === 0) {
+                                await enviarResposta(sender, { text: '⭐ Favoritos vazio. Busque um jogo e digite *favoritar*' });
+                                return;
+                            }
+                            let msgFav = `⭐ *FAVORITOS* (${favs.length})\n\n`;
+                            favs.forEach((j, i) => {
+                                msgFav += `${i+1}. ${j.jogo}\n`;
+                            });
+                            await enviarResposta(sender, { text: msgFav });
+                            break;
+                            
+                        case '8':
+                            await enviarResposta(sender, { text: 
+                                `👥 *INDICAR*\n\n` +
+                                `Peça para digitar:\n*indicado ${sender.split('@')[0]}*\n\n` +
+                                `✅ Voce ganha 2h extras!\n` +
+                                `✅ Amigo ganha 10% OFF!`
+                            });
+                            break;
+                            
+                        case '9':
+                            const pts = db.getPerfil(sender).pontos || 0;
+                            await enviarResposta(sender, { text: 
+                                `💎 *PONTOS: ${pts}*\n\n` +
+                                `Como ganhar:\n` +
+                                `• Compra: 10 pts/R$\n` +
+                                `• Indicar: 50 pts\n\n` +
+                                `Trocar:\n` +
+                                `• 50 pts = 1 dia\n` +
+                                `• 100 pts = 3 dias\n` +
+                                `• 200 pts = 7 dias\n\n` +
+                                (pts >= 50 ? `Digite *trocar pontos*` : `Junte mais pontos!`)
+                            });
+                            break;
+                            
+                        case '10':
+                            userStates.set(sender, { step: 'ticket_tipo' });
+                            await enviarResposta(sender, { text: 
+                                `🎫 *SUPORTE*\n\n` +
+                                `1️⃣ Conta nao funciona\n` +
+                                `2️⃣ Problema pagamento\n` +
+                                `3️⃣ Duvida\n` +
+                                `4️⃣ Outro\n\n` +
+                                `Digite o numero:`
+                            });
+                            break;
+                            
+                        case '0':
+                            await enviarResposta(sender, { text: '💬 Chamando atendente... Aguarde!' });
+                            await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', { 
+                                text: `🚨 *ATENDIMENTO*\n\n*Cliente:* ${pushName}\n*Numero:* ${sender.split('@')[0]}` 
+                            });
+                            break;
+                            
+                        default:
+                            await enviarResposta(sender, { text: getMenuPrincipal(pushName, temAcesso) });
+                    }
+                }
+
+                
+                // TICKET
+                else if (userState.step === 'ticket_tipo') {
+                    const tipos = { '1': 'Conta nao funciona', '2': 'Problema pagamento', '3': 'Duvida', '4': 'Outro' };
+                    if (tipos[text]) {
+                        userStates.set(sender, { step: 'ticket_desc', tipo: tipos[text] });
+                        await enviarResposta(sender, { text: `✅ *${tipos[text]}*\n\nDescreva o problema:` });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Opcao invalida! Digite 1-4:' });
+                    }
+                }
+                else if (userState.step === 'ticket_desc') {
+                    const ticket = db.criarTicket({
+                        numero: sender,
+                        nome: pushName,
+                        tipo: userState.tipo,
+                        descricao: textOriginal
+                    });
+                    
+                    await sock.sendMessage(ADMIN_NUMBER + '@s.whatsapp.net', {
+                        text: `🎫 *NOVO TICKET ${ticket.id}*\n\n*Cliente:* ${pushName}\n*Tipo:* ${userState.tipo}\n\n*Descricao:*\n${textOriginal}`
+                    });
+                    
+                    userStates.set(sender, { step: 'menu' });
+                    await enviarResposta(sender, { text: `✅ *Ticket ${ticket.id} aberto!*\n\nResponderemos em breve.` });
+                }
+                
+                // TROCAR PONTOS
+                else if (text === 'trocar pontos' && userState.step === 'menu') {
+                    const pts = db.getPerfil(sender).pontos || 0;
+                    if (pts >= 50) {
+                        userStates.set(sender, { step: 'trocar_pts', pts });
+                        await enviarResposta(sender, { text: 
+                            `💎 *TROCAR* (${pts} pts)\n\n` +
+                            `1️⃣ 50 pts = 1 dia\n` +
+                            `2️⃣ 100 pts = 3 dias\n` +
+                            `3️⃣ 200 pts = 7 dias\n\n` +
+                            `Digite:`
+                        });
+                    } else {
+                        await enviarResposta(sender, { text: `❌ Precisa de 50 pts! Voce tem ${pts}` });
+                    }
+                }
+                else if (userState.step === 'trocar_pts') {
+                    const custos = { '1': [50, 1], '2': [100, 3], '3': [200, 7] };
+                    if (custos[text] && userState.pts >= custos[text][0]) {
+                        db.adicionarPontos(sender, -custos[text][0]);
+                        db.adicionarDiasExtras(sender, custos[text][1]);
+                        userStates.set(sender, { step: 'menu' });
+                        await enviarResposta(sender, { text: `✅ Troca feita! +${custos[text][1]} dias!` });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Opcao invalida!' });
+                        userStates.set(sender, { step: 'menu' });
+                    }
+                }
+                
+                // VER JOGOS
+                else if (userState.step === 'ver_jogos') {
+                    const conta = db.buscarContaIlimitada(textOriginal);
+                    if (conta) {
+                        db.registrarJogoResgatado(sender, conta);
+                        userStates.set(sender, { step: 'pos_resgate', conta });
+                        await enviarResposta(sender, { text: 
+                            `🎮 *${conta.jogo}*\n\n` +
+                            `👤 Login: ${conta.login}\n` +
+                            `🔒 Senha: ${conta.senha}\n\n` +
+                            `⚠️ Modo OFFLINE apenas!\n` +
+                            `Digite *favoritar* ou *menu*`
+                        });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Jogo nao encontrado!' });
+                    }
+                }
+                
+                // POS RESGATE
+                else if (userState.step === 'pos_resgate') {
+                    if (text === 'favoritar') {
+                        const r = db.toggleFavorito(sender, userState.conta.id);
+                        await enviarResposta(sender, { text: r.adicionado ? '⭐ Adicionado!' : '❌ Removido!' });
+                    }
+                    userStates.set(sender, { step: 'menu' });
+                    await enviarResposta(sender, { text: getMenuPrincipal(pushName, temAcesso) });
+                }
+                
+                // RESGATAR KEY
+                else if (userState.step === 'resgatar_key') {
+                    const key = text.toUpperCase().replace(/\s/g, '');
+                    
+                    // Verifica cupom
+                    const cupom = db.verificarCupom(key);
+                    if (cupom.valido) {
+                        userStates.set(sender, { step: 'cupom_plano', cupom });
+                        await enviarResposta(sender, { text: 
+                            `🎟️ *CUPOM ${cupom.desconto}% OFF!*\n\n` +
+                            `1️⃣ 7 dias: R$ ${(10 * (1-cupom.desconto/100)).toFixed(0)}\n` +
+                            `2️⃣ 1 mes: R$ ${(25 * (1-cupom.desconto/100)).toFixed(0)}\n` +
+                            `3️⃣ Lifetime: R$ ${(80 * (1-cupom.desconto/100)).toFixed(0)}\n\n` +
+                            `Digite para comprar:`
+                        });
+                        return;
+                    }
+                    
+                    if (key === ADMIN_MASTER_KEY) {
+                        db.resgatarMasterKey(key, sender, pushName);
+                        userStates.set(sender, { step: 'menu' });
+                        await enviarResposta(sender, { text: '👑 *ADMIN ATIVADO!* Digite: *admin*' });
+                        return;
+                    }
+                    
+                    const r = db.resgatarKey(key, sender, pushName);
+                    if (r.sucesso) {
+                        const pts = r.plano === '7dias' ? 100 : r.plano === '1mes' ? 250 : 800;
+                        db.adicionarPontos(sender, pts);
+                        userStates.set(sender, { step: 'menu' });
+                        await enviarResposta(sender, { text: 
+                            `✅ *KEY ATIVADA!*\n\n` +
+                            `📦 ${r.plano}\n` +
+                            `📅 ${r.expira}\n` +
+                            `💎 +${pts} pontos!`
+                        });
+                    } else {
+                        await enviarResposta(sender, { text: `❌ ${r.erro}` });
+                    }
+                }
+                
+                // CUPOM PLANO
+                else if (userState.step === 'cupom_plano') {
+                    const precos = { '1': 10, '2': 25, '3': 80 };
+                    const planos = { '1': '7dias', '2': '1mes', '3': 'lifetime' };
+                    if (precos[text]) {
+                        const final = (precos[text] * (1 - userState.cupom.desconto/100)).toFixed(0);
+                        userStates.set(sender, { step: 'menu' });
+                        await enviarResposta(sender, { text: 
+                            `🎟️ *CUPOM APLICADO*\n\n` +
+                            `📦 ${planos[text]}\n` +
+                            `💰 R$ ${final} (com ${userState.cupom.desconto}% OFF)\n\n` +
+                            `💬 Fale com: +${ADMIN_NUMBER}\n` +
+                            `Mencione: *${userState.cupom.codigo}*`
+                        });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Opcao invalida!' });
+                    }
+                }
+                
+                // BUSCAR JOGO
+                else if (userState.step === 'buscar_jogo') {
+                    if (text.startsWith('indicado')) {
+                        const num = text.replace('indicado', '').trim();
+                        if (num) {
+                            const r = db.registrarIndicacao(num + '@s.whatsapp.net', sender);
+                            if (r.sucesso) {
+                                await enviarResposta(sender, { text: `🎉 Indicacao feita! +${r.horasGanhas}h!` });
+                                await sock.sendMessage(num + '@s.whatsapp.net', { text: `🎁 Bonus! +${r.horasGanhas}h extras!` });
+                            } else {
+                                await enviarResposta(sender, { text: `❌ ${r.erro}` });
+                            }
+                        }
+                        userStates.set(sender, { step: 'menu' });
+                        return;
+                    }
+                    
+                    const conta = db.buscarContaIlimitada(textOriginal);
+                    if (conta) {
+                        db.registrarJogoResgatado(sender, conta);
+                        userStates.set(sender, { step: 'pos_resgate', conta });
+                        await enviarResposta(sender, { text: 
+                            `🎮 *${conta.jogo}*\n\n` +
+                            `👤 ${conta.login}\n` +
+                            `🔒 ${conta.senha}\n\n` +
+                            `⚠️ OFFLINE apenas!`
+                        });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Jogo nao encontrado!' });
+                    }
+                }
+
+                
+                // ==========================================
+                // MENU ADMIN
+                // ==========================================
+                else if (userState.step === 'admin_menu' && isAdmin) {
+                    switch(text) {
+                        case '1':
+                            userStates.set(sender, { step: 'admin_add_jogo', temp: {} });
+                            await enviarResposta(sender, { text: '➕ Nome do jogo:' });
+                            break;
+                        case '2':
+                            userStates.set(sender, { step: 'admin_key_plano' });
+                            await enviarResposta(sender, { text: '🔑 Plano:\n1️⃣ 7 dias\n2️⃣ 1 mes\n3️⃣ Lifetime' });
+                            break;
+                        case '3':
+                            userStates.set(sender, { step: 'admin_teste_duracao' });
+                            await enviarResposta(sender, { text: '🎁 Duracao:\n1️⃣ 1h\n2️⃣ 2h\n3️⃣ 6h' });
+                            break;
+                        case '4':
+                            userStates.set(sender, { step: 'admin_importar_arquivo' });
+                            await enviarResposta(sender, { text: '📄 Envie arquivo .txt ou digite AUTO' });
+                            break;
+                        case '5':
+                            userStates.set(sender, { step: 'admin_importar_multiplas' });
+                            await enviarResposta(sender, { text: '📋 Cole as contas (login:senha ou numero jogo login senha):' });
+                            break;
+                        case '6':
+                            const jogos = db.getTodosJogosDisponiveis();
+                            let msg = '❌ *Remover*\n\n';
+                            jogos.slice(0, 10).forEach((j, i) => { msg += `${i+1}. ${j.jogo}\n`; });
+                            msg += '\nDigite numero ou *TODOS*';
+                            userStates.set(sender, { step: 'admin_remover', jogos });
+                            await enviarResposta(sender, { text: msg });
+                            break;
+                        case '7':
+                            const total = db.getTodosJogosDisponiveis().length;
+                            userStates.set(sender, { step: 'admin_remover_todos_confirmar' });
+                            await enviarResposta(sender, { text: `🗑️ REMOVER TODOS?\n\n⚠️ ${total} jogos serao apagados!\n\nDigite *CONFIRMAR* ou *CANCELAR*` });
+                            break;
+                        case '8':
+                            const stats = db.getEstatisticas();
+                            await enviarResposta(sender, { text: 
+                                `📊 *ESTATISTICAS*\n\n` +
+                                `🎮 Jogos: ${stats.totalJogos}\n` +
+                                `👥 Clientes: ${stats.totalClientes}\n` +
+                                `🟢 Ativos: ${stats.clientesAtivos}\n` +
+                                `🔴 Inativos: ${stats.clientesInativos}\n` +
+                                `🔑 Keys: ${stats.keysAtivas}\n` +
+                                `💰 Vendas: R$ ${stats.totalVendas || 0}\n` +
+                                `💎 Pontos: ${stats.totalPontos || 0}\n` +
+                                `🎫 Tickets: ${stats.ticketsAbertos || 0}`
+                            });
+                            break;
+                        case '9':
+                            const logs = db.getLogs({}, 15);
+                            let msgLogs = '📜 *LOGS*\n\n';
+                            logs.forEach((l, i) => {
+                                msgLogs += `${i+1}. [${l.tipo}] ${new Date(l.data).toLocaleTimeString()}\n`;
+                            });
+                            await enviarResposta(sender, { text: msgLogs });
+                            break;
+                        case '10':
+                            const { ativos } = db.getClientesPorStatus();
+                            let msgAtv = `🟢 *ATIVOS* (${ativos.length})\n\n`;
+                            ativos.slice(0, 10).forEach((c, i) => {
+                                msgAtv += `${i+1}. ${c.nome || 'Cliente'}\n   📱 ${c.numero?.split('@')[0]}\n`;
+                            });
+                            await enviarResposta(sender, { text: msgAtv });
+                            break;
+                        case '11':
+                            const { inativos } = db.getClientesPorStatus();
+                            let msgInat = `🔴 *INATIVOS* (${inativos.length})\n\n`;
+                            inativos.slice(0, 10).forEach((c, i) => {
+                                msgInat += `${i+1}. ${c.nome || 'Cliente'}\n`;
+                            });
+                            await enviarResposta(sender, { text: msgInat });
+                            break;
+                        case '12':
+                            const rank = db.getRankingClientes(10);
+                            let msgRank = `🏆 *RANKING*\n\n`;
+                            rank.forEach((c, i) => {
+                                const medal = i < 3 ? ['🥇','🥈','🥉'][i] : `${i+1}.`;
+                                msgRank += `${medal} ${c.nome}\n   🎮 ${c.jogos} jogos\n`;
+                            });
+                            await enviarResposta(sender, { text: msgRank });
+                            break;
+                        case '13':
+                            userStates.set(sender, { step: 'admin_banir' });
+                            await enviarResposta(sender, { text: '⛔ Numero para banir:' });
+                            break;
+                        case '14':
+                            userStates.set(sender, { step: 'admin_desbanir' });
+                            await enviarResposta(sender, { text: '✅ Numero para desbanir:' });
+                            break;
+                        case '15':
+                            const blacklist = db.getBlacklist();
+                            let msgBl = `🚫 *BLACKLIST* (${blacklist.length})\n\n`;
+                            blacklist.slice(0, 10).forEach((b, i) => {
+                                msgBl += `${i+1}. ${b.login}\n`;
+                            });
+                            await enviarResposta(sender, { text: msgBl });
+                            break;
+                        case '16':
+                            userStates.set(sender, { step: 'admin_broadcast' });
+                            await enviarResposta(sender, { text: '📢 Digite a mensagem para todos:' });
+                            break;
+                        case '17':
+                            const recentes = db.getJogosRecentes(5);
+                            const clientesAtv = db.getTodosClientes().filter(c => c.temAcesso);
+                            let msgNov = `✨ *NOVIDADES!*\n\n🎮 Novos jogos:\n`;
+                            recentes.forEach((j, i) => { msgNov += `${i+1}. ${j.jogo}\n`; });
+                            msgNov += '\nDigite 4 para ver todos!';
+                            
+                            let enviados = 0;
+                            for (const c of clientesAtv) {
+                                try {
+                                    await antiBanDelay(sock, c.numero);
+                                    await sock.sendMessage(c.numero, { text: msgNov });
+                                    enviados++;
+                                } catch (e) {}
+                            }
+                            await enviarResposta(sender, { text: `✅ Enviado para ${enviados} clientes!` });
+                            break;
+                        case '18':
+                            userStates.set(sender, { step: 'admin_cupom_codigo' });
+                            await enviarResposta(sender, { text: '🎟️ Codigo do cupom:' });
+                            break;
+                        case '19':
+                            const backupDir = './backups';
+                            if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+                            const data = new Date().toISOString().split('T')[0];
+                            const backupFile = path.join(backupDir, `backup-${data}.json`);
+                            fs.writeFileSync(backupFile, JSON.stringify({
+                                data: new Date().toISOString(),
+                                contas: db.contas,
+                                keys: db.keys,
+                                clientes: db.clientes
+                            }, null, 2));
+                            await enviarResposta(sender, { text: `💾 Backup criado!\n📁 ${backupFile}` });
+                            break;
+                        case '0':
+                        case 'menu':
+                            userStates.set(sender, { step: 'menu' });
+                            await enviarResposta(sender, { text: getMenuPrincipal(pushName, temAcesso) });
+                            break;
+                        default:
+                            await enviarResposta(sender, { text: getMenuAdmin() });
+                    }
+                }
+
+                
+                // ADMIN: ADICIONAR CONTA
+                else if (userState.step === 'admin_add_jogo' && isAdmin) {
+                    userStates.set(sender, { step: 'admin_add_login', temp: { jogo: textOriginal } });
+                    await enviarResposta(sender, { text: `🎮 ${textOriginal}\n\nLogin:` });
+                }
+                else if (userState.step === 'admin_add_login' && isAdmin) {
+                    userStates.set(sender, { step: 'admin_add_senha', temp: { ...userState.temp, login: textOriginal } });
+                    await enviarResposta(sender, { text: `👤 ${textOriginal}\n\nSenha:` });
+                }
+                else if (userState.step === 'admin_add_senha' && isAdmin) {
+                    const conta = { ...userState.temp, senha: textOriginal };
+                    conta.categoria = new ContasSteamParser().detectarCategoria(conta.jogo);
+                    db.adicionarConta(conta);
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await enviarResposta(sender, { text: `✅ Adicionado!\n\n🎮 ${conta.jogo}\n👤 ${conta.login}` });
+                }
+                
+                // ADMIN: GERAR KEY
+                else if (userState.step === 'admin_key_plano' && isAdmin) {
+                    const planos = { '1': ['7dias', 7], '2': ['1mes', 30], '3': ['lifetime', 36500] };
+                    if (planos[text]) {
+                        const key = `NYUX-${Math.random().toString(36).substring(2,6).toUpperCase()}-${Math.random().toString(36).substring(2,6).toUpperCase()}`;
+                        db.gerarKey(key, planos[text][0], planos[text][1], sender);
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `✅ *KEY GERADA!*\n\n🔑 ${key}\n📦 ${planos[text][0]}` });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Opcao invalida!' });
+                    }
+                }
+                
+                // ADMIN: KEY TESTE
+                else if (userState.step === 'admin_teste_duracao' && isAdmin) {
+                    const duracoes = { '1': ['1 hora', 1], '2': ['2 horas', 2], '3': ['6 horas', 6] };
+                    if (duracoes[text]) {
+                        const key = `TESTE-${Math.random().toString(36).substring(2,6).toUpperCase()}-${Math.random().toString(36).substring(2,8).toUpperCase()}`;
+                        db.gerarKeyTeste(key, duracoes[text][0], duracoes[text][1]);
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `🎁 *KEY TESTE!*\n\n🔑 ${key}\n⏱️ ${duracoes[text][0]}` });
+                    }
+                }
+                
+                // ADMIN: IMPORTAR MULTIPLAS
+                else if (userState.step === 'admin_importar_multiplas' && isAdmin) {
+                    const parser = new ContasSteamParser();
+                    const resultado = parser.processarMultiplasContas(textOriginal);
+                    let adicionadas = 0;
+                    for (const conta of resultado.adicionadas) {
+                        if (db.adicionarConta(conta).sucesso) adicionadas++;
+                    }
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await enviarResposta(sender, { text: 
+                        `📋 *IMPORTACAO*\n\n` +
+                        `✅ Adicionadas: ${adicionadas}\n` +
+                        `❌ Removidas: ${resultado.removidas.length}\n` +
+                        `⚠️ Erros: ${resultado.erros.length}`
+                    });
+                }
+                
+                // ADMIN: IMPORTAR ARQUIVO
+                else if (userState.step === 'admin_importar_arquivo' && isAdmin) {
+                    if (text.toLowerCase() === 'auto' && fs.existsSync('contas.txt')) {
+                        const conteudo = fs.readFileSync('contas.txt', 'utf8');
+                        const parser = new ContasSteamParser();
+                        const resultado = parser.processarMultiplasContas(conteudo);
+                        let adicionadas = 0;
+                        for (const conta of resultado.adicionadas) {
+                            if (db.adicionarConta(conta).sucesso) adicionadas++;
+                        }
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `✅ Auto: ${adicionadas} adicionadas` });
+                    } else {
+                        await enviarResposta(sender, { text: 'Envie arquivo .txt' });
+                    }
+                }
+                
+                // ADMIN: REMOVER
+                else if (userState.step === 'admin_remover' && isAdmin) {
+                    if (text.toLowerCase() === 'todos') {
+                        userStates.set(sender, { step: 'admin_remover_todos_confirmar' });
+                        await enviarResposta(sender, { text: `🗑️ REMOVER TODOS?\n\nDigite *CONFIRMAR* ou *CANCELAR*` });
+                        return;
+                    }
+                    const escolha = parseInt(text);
+                    let conta = null;
+                    if (!isNaN(escolha) && escolha >= 1 && escolha <= userState.jogos.length) {
+                        conta = userState.jogos[escolha - 1];
+                    } else {
+                        conta = userState.jogos.find(c => c.jogo.toLowerCase().includes(text.toLowerCase()));
+                    }
+                    if (conta) {
+                        db.removerConta(conta.id);
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `✅ Removido: ${conta.jogo}` });
+                    } else {
+                        await enviarResposta(sender, { text: '❌ Nao encontrado!' });
+                    }
+                }
+                
+                // ADMIN: REMOVER TODOS CONFIRMAR
+                else if (userState.step === 'admin_remover_todos_confirmar' && isAdmin) {
+                    if (text === 'confirmar' || text === 'CONFIRMAR') {
+                        const total = db.removerTodasContas();
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `🗑️ *${total} JOGOS REMOVIDOS!*` });
+                    } else {
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: '✅ Cancelado.' });
+                    }
+                }
+                
+                // ADMIN: BANIR/DESBANIR
+                else if (userState.step === 'admin_banir' && isAdmin) {
+                    const num = text.replace(/\D/g, '');
+                    db.banirUsuario(num + '@s.whatsapp.net', 'Banido pelo admin');
+                    await sock.sendMessage(num + '@s.whatsapp.net', { text: '⛔ Voce foi banido.' }).catch(() => {});
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await enviarResposta(sender, { text: `⛔ ${num} banido!` });
+                }
+                else if (userState.step === 'admin_desbanir' && isAdmin) {
+                    const num = text.replace(/\D/g, '');
+                    db.desbanirUsuario(num + '@s.whatsapp.net');
+                    await sock.sendMessage(num + '@s.whatsapp.net', { text: '✅ Voce foi desbanido!' }).catch(() => {});
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await enviarResposta(sender, { text: `✅ ${num} desbanido!` });
+                }
+                
+                // ADMIN: BROADCAST
+                else if (userState.step === 'admin_broadcast' && isAdmin) {
+                    const clientes = db.getTodosClientes();
+                    let enviados = 0;
+                    for (const c of clientes) {
+                        try {
+                            await antiBanDelay(sock, c.numero);
+                            await sock.sendMessage(c.numero, { text: `📢 *ADMIN*\n\n${textOriginal}` });
+                            enviados++;
+                        } catch (e) {}
+                    }
+                    userStates.set(sender, { step: 'admin_menu' });
+                    await enviarResposta(sender, { text: `✅ Broadcast: ${enviados} enviados` });
+                }
+                
+                // ADMIN: CUPOM
+                else if (userState.step === 'admin_cupom_codigo' && isAdmin) {
+                    const codigo = text.toUpperCase().replace(/\s/g, '');
+                    userStates.set(sender, { step: 'admin_cupom_desc', codigo });
+                    await enviarResposta(sender, { text: `🎟️ ${codigo}\n\nDesconto %:` });
+                }
+                else if (userState.step === 'admin_cupom_desc' && isAdmin) {
+                    const desc = parseInt(text);
+                    if (desc > 0 && desc <= 100) {
+                        db.criarCupom(userState.codigo, desc, sender);
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `✅ Cupom ${userState.codigo} criado! ${desc}% OFF` });
+                    }
+                }
+                
+                // DOCUMENTO RECEBIDO
+                if (msg.message.documentMessage && isAdmin && userState.step === 'admin_importar_arquivo') {
+                    try {
+                        const buffer = await sock.downloadMediaMessage(msg);
+                        const conteudo = buffer.toString('utf8');
+                        const parser = new ContasSteamParser();
+                        const resultado = parser.processarMultiplasContas(conteudo);
+                        let adicionadas = 0;
+                        for (const conta of resultado.adicionadas) {
+                            if (db.adicionarConta(conta).sucesso) adicionadas++;
+                        }
+                        userStates.set(sender, { step: 'admin_menu' });
+                        await enviarResposta(sender, { text: `📄 Arquivo: ${adicionadas} adicionadas` });
+                    } catch (e) {
+                        await enviarResposta(sender, { text: '❌ Erro no arquivo!' });
+                    }
+                }
+                
+            } catch (error) {
+                console.error('❌ Erro:', error);
+                try {
+                    await antiBanDelay(sock, sender);
+                    await sock.sendMessage(sender, { text: '❌ Erro! Digite *menu*' });
+                } catch (e) {}
+            }
+        });
+        
+    } catch (err) {
+        console.error('❌ Erro conexao:', err);
+        reconectando = false;
+        setTimeout(connectToWhatsApp, 10000);
+    }
+}
+
+// ==========================================
+// INICIALIZACAO
+// ==========================================
+console.log('╔════════════════════════════════════════╗');
+console.log('║     🎮 NYUX STORE BOT - MEGA v2.0      ║');
+console.log('║   Anti-Ban + Contas Ilimitadas + TUDO  ║');
+console.log('╚════════════════════════════════════════╝\n');
+
+connectToWhatsApp();
