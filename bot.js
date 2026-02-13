@@ -16,22 +16,63 @@ const PORT = process.env.PORT || 8080;
 const ADMIN_MASTER_KEY = 'NYUX-ADM1-GUIXS23';
 
 // ==========================================
-// DELAY HUMANO - Anti-detecao (5-15 segundos)
+// ANTI-BAN INTELIGENTE - Delay curto + técnicas avançadas
 // ==========================================
-function delayHumano() {
-    return Math.floor(Math.random() * 10000) + 5000;
+
+// Controle de taxa de mensagens
+const mensagensPorMinuto = new Map();
+const MAX_MSG_POR_MINUTO = 20; // Limite seguro
+
+function delayInteligente() {
+    // Delay curto e variável: 800ms a 2200ms
+    return Math.floor(Math.random() * 1400) + 800;
 }
 
-async function esperarDelay() {
-    const tempo = delayHumano();
-    console.log(`⏳ Delay humano: ${tempo/1000}s...`);
+async function antiBanDelay(sock, destino) {
+    const tempo = delayInteligente();
+    
+    // 1. Simula "digitando..." (muito efetivo!)
+    try {
+        await sock.sendPresenceUpdate('composing', destino);
+    } catch (e) {}
+    
+    // 2. Aguarda tempo aleatório
     await new Promise(resolve => setTimeout(resolve, tempo));
+    
+    // 3. Para de mostrar "digitando"
+    try {
+        await sock.sendPresenceUpdate('paused', destino);
+    } catch (e) {}
+    
+    console.log(`⏱️ Delay: ${tempo}ms`);
+}
+
+// Verifica se não está enviando muitas mensagens
+function verificarTaxaMensagens(numero) {
+    const agora = Date.now();
+    const umMinutoAtras = agora - 60000;
+    
+    if (!mensagensPorMinuto.has(numero)) {
+        mensagensPorMinuto.set(numero, []);
+    }
+    
+    const historico = mensagensPorMinuto.get(numero).filter(t => t > umMinutoAtras);
+    mensagensPorMinuto.set(numero, historico);
+    
+    if (historico.length >= MAX_MSG_POR_MINUTO) {
+        console.log(`⚠️ Taxa limite atingida para ${numero}`);
+        return false;
+    }
+    
+    historico.push(agora);
+    return true;
 }
 
 console.log('🚀 Iniciando NyuxStore...');
 console.log('📱 Bot:', BOT_NUMBER);
 console.log('👑 Admin:', ADMIN_NUMBER);
-console.log('⏱️ Delay humano: 5-15s ativado');
+console.log('⏱️ Anti-Ban: Delay 0.8-2.2s + "digitando..."');
+console.log('🛡️ Limite: 20 msg/min por usuário');
 console.log('');
 
 // ==========================================
@@ -100,11 +141,27 @@ class ContasSteamParser {
     }
 
     processarMultiplasContas(texto) {
-        const linhas = texto.split('\n').filter(l => l.trim());
+        // Divide por linhas (suporta \n, \r\n, \r)
+        const linhas = texto.split(/\r?\n/).filter(l => l.trim());
         const resultados = { adicionadas: [], removidas: [], erros: [] };
-        for (const linha of linhas) {
-            const conta = this.parseLinhaSimples(linha.trim());
+        
+        console.log(`📄 Total de linhas encontradas: ${linhas.length}`);
+        
+        for (let i = 0; i < linhas.length; i++) {
+            const linha = linhas[i].trim();
+            
+            // Pula linhas vazias ou comentários
+            if (!linha || linha.startsWith('//') || linha.startsWith('#')) continue;
+            
+            const conta = this.parseLinhaSimples(linha, i);
+            
             if (conta) {
+                // Valida dados mínimos
+                if (!conta.login || !conta.senha || conta.login.length < 2 || conta.senha.length < 2) {
+                    resultados.erros.push(`Linha ${i+1}: Login/senha muito curto - "${linha.substring(0, 30)}..."`);
+                    continue;
+                }
+                
                 const verificacao = this.verificarContaProblematica(conta);
                 if (verificacao.problema) {
                     resultados.removidas.push({ numero: conta.numero, jogo: conta.jogo, motivo: verificacao.motivo });
@@ -112,38 +169,143 @@ class ContasSteamParser {
                     resultados.adicionadas.push(conta);
                 }
             } else {
-                resultados.erros.push(linha.trim());
+                // Só adiciona aos erros se a linha tem conteúdo significativo
+                if (linha.length > 5) {
+                    resultados.erros.push(`Linha ${i+1}: Formato não reconhecido - "${linha.substring(0, 40)}..."`);
+                }
             }
         }
+        
+        console.log(`✅ Adicionadas: ${resultados.adicionadas.length}`);
+        console.log(`❌ Removidas: ${resultados.removidas.length}`);
+        console.log(`⚠️ Erros: ${resultados.erros.length}`);
+        
         return resultados;
     }
 
-    parseLinhaSimples(linha) {
-        linha = linha.replace(/^[🔢🎮👤🔒✅❌📱\s]+/g, '').trim();
+    parseLinhaSimples(linha, index = 0) {
+        // Limpa emojis e caracteres especiais do início
+        linha = linha.replace(/^[🔢🎮👤🔒✅❌📱⚡✨🎯🎲🏆⭐💎🎁🔑\s]+/g, '').trim();
+        
+        // Ignora linhas vazias ou comentários
+        if (!linha || linha.startsWith('//') || linha.startsWith('#')) return null;
+        
+        let numero = (index + 1).toString();
+        let jogo = '';
+        let login = '';
+        let senha = '';
+        
+        // ===== FORMATO 1: NUMERO | JOGO | LOGIN | SENHA =====
         if (linha.includes('|')) {
-            const partes = linha.split('|').map(p => p.trim());
+            const partes = linha.split('|').map(p => p.trim()).filter(p => p);
             if (partes.length >= 4) {
-                return { numero: partes[0], jogo: partes[1], login: partes[2], senha: partes[3], categoria: this.detectarCategoria(partes[1]) };
+                numero = partes[0].replace(/\D/g, '') || numero;
+                jogo = partes[1];
+                login = partes[2];
+                senha = partes[3];
+                return { numero, jogo, login, senha, categoria: this.detectarCategoria(jogo) };
+            }
+            // Login|Senha (só 2 partes)
+            if (partes.length === 2) {
+                login = partes[0];
+                senha = partes[1];
+                jogo = 'Conta Steam ' + numero;
+                return { numero, jogo, login, senha, categoria: '🎮 Acao/Aventura' };
             }
         }
+        
+        // ===== FORMATO 2: NUMERO - JOGO - LOGIN - SENHA =====
         if (linha.includes(' - ')) {
-            const partes = linha.split(' - ').map(p => p.trim());
+            const partes = linha.split(' - ').map(p => p.trim()).filter(p => p);
             if (partes.length >= 4) {
-                return { numero: partes[0], jogo: partes[1], login: partes[2], senha: partes[3], categoria: this.detectarCategoria(partes[1]) };
+                numero = partes[0].replace(/\D/g, '') || numero;
+                jogo = partes[1];
+                login = partes[2];
+                senha = partes[3];
+                return { numero, jogo, login, senha, categoria: this.detectarCategoria(jogo) };
             }
         }
-        const partes = linha.split(/\s+/);
+        
+        // ===== FORMATO 3: Login:Senha ou Login;Senha =====
+        if (linha.includes(':') && !linha.includes('http')) {
+            const partes = linha.split(':').map(p => p.trim()).filter(p => p);
+            if (partes.length >= 2) {
+                login = partes[0];
+                senha = partes.slice(1).join(':'); // Senha pode ter : dentro
+                jogo = 'Conta Steam ' + numero;
+                return { numero, jogo, login, senha, categoria: '🎮 Acao/Aventura' };
+            }
+        }
+        
+        // ===== FORMATO 4: Login;Senha =====
+        if (linha.includes(';')) {
+            const partes = linha.split(';').map(p => p.trim()).filter(p => p);
+            if (partes.length >= 2) {
+                login = partes[0];
+                senha = partes[1];
+                jogo = 'Conta Steam ' + numero;
+                return { numero, jogo, login, senha, categoria: '🎮 Acao/Aventura' };
+            }
+        }
+        
+        // ===== FORMATO 5: TAB separado =====
+        if (linha.includes('\t')) {
+            const partes = linha.split('\t').map(p => p.trim()).filter(p => p);
+            if (partes.length >= 4) {
+                numero = partes[0].replace(/\D/g, '') || numero;
+                jogo = partes[1];
+                login = partes[2];
+                senha = partes[3];
+                return { numero, jogo, login, senha, categoria: this.detectarCategoria(jogo) };
+            }
+            if (partes.length === 2) {
+                login = partes[0];
+                senha = partes[1];
+                jogo = 'Conta Steam ' + numero;
+                return { numero, jogo, login, senha, categoria: '🎮 Acao/Aventura' };
+            }
+        }
+        
+        // ===== FORMATO 6: NUMERO JOGO LOGIN SENHA (espaços) =====
+        const partes = linha.split(/\s+/).filter(p => p);
         if (partes.length >= 4) {
-            if (/^\d{1,4}$/.test(partes[0])) {
-                const numero = partes[0];
-                const senha = partes[partes.length - 1];
-                const login = partes[partes.length - 2];
-                const jogo = partes.slice(1, -2).join(' ');
-                if (numero && jogo && login && senha) {
+            // Se começa com número
+            if (/^\d+$/.test(partes[0])) {
+                numero = partes[0];
+                senha = partes[partes.length - 1];
+                login = partes[partes.length - 2];
+                jogo = partes.slice(1, -2).join(' ');
+                if (jogo && login && senha) {
                     return { numero, jogo, login, senha, categoria: this.detectarCategoria(jogo) };
                 }
             }
         }
+        
+        // ===== FORMATO 7: Só LOGIN e SENHA (2 partes) =====
+        if (partes.length === 2) {
+            // Verifica se parece email ou usuário
+            if (partes[0].length > 2 && partes[1].length > 2) {
+                login = partes[0];
+                senha = partes[1];
+                jogo = 'Conta Steam ' + numero;
+                return { numero, jogo, login, senha, categoria: '🎮 Acao/Aventura' };
+            }
+        }
+        
+        // ===== FORMATO 8: EMAIL + SENHA (detecta @) =====
+        const emailMatch = linha.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/);
+        if (emailMatch) {
+            login = emailMatch[1];
+            // Senha é o resto da linha depois do email
+            const depoisEmail = linha.substring(linha.indexOf(login) + login.length).trim();
+            // Remove separadores comuns
+            senha = depoisEmail.replace(/^[:;|\-\s]+/, '').trim();
+            if (senha) {
+                jogo = 'Conta Steam ' + numero;
+                return { numero, jogo, login, senha, categoria: '🎮 Acao/Aventura' };
+            }
+        }
+        
         return null;
     }
 
@@ -449,7 +611,15 @@ async function connectToWhatsApp() {
             async function enviarResposta(destino, mensagem) {
                 if (respostaEnviada) return;
                 respostaEnviada = true;
-                await esperarDelay();
+                
+                // Verifica taxa de mensagens
+                if (!verificarTaxaMensagens(destino)) {
+                    await sock.sendMessage(destino, { text: '⏳ Aguarde um momento... Estou processando muitas mensagens.' });
+                    await new Promise(r => setTimeout(r, 5000));
+                }
+                
+                // Anti-ban: simula digitando + delay curto
+                await antiBanDelay(sock, destino);
                 await sock.sendMessage(destino, mensagem);
             }
             
@@ -953,7 +1123,7 @@ async function connectToWhatsApp() {
                     await enviarResposta(sender, { text: `📢 Enviando para ${clientes.length} clientes...\n\nAguarde...` });
                     for (const cliente of clientes) {
                         try {
-                            await esperarDelay();
+                            await antiBanDelay(sock, cliente.numero);
                             await sock.sendMessage(cliente.numero, { text: `📢 *MENSAGEM DO ADMIN*\n\n${textOriginal}` });
                             enviados++;
                         } catch (e) { falhas++; }
@@ -1020,19 +1190,41 @@ async function connectToWhatsApp() {
                 
                 // ========== ADMIN: IMPORTAR MULTIPLAS CONTAS ==========
                 else if (userState.step === 'admin_importar_multiplas' && isAdmin) {
+                    console.log('📥 Iniciando importação múltiplas...');
+                    console.log('📄 Texto recebido (primeiros 200 chars):', textOriginal.substring(0, 200));
+                    
                     const parser = new ContasSteamParser();
                     const resultado = parser.processarMultiplasContas(textOriginal);
+                    
+                    console.log(`📊 Resultado: ${resultado.adicionadas.length} adicionadas, ${resultado.removidas.length} removidas, ${resultado.erros.length} erros`);
+                    
                     let adicionadasCount = 0;
                     for (const conta of resultado.adicionadas) {
                         const r = db.adicionarConta(conta);
                         if (r.sucesso) adicionadasCount++;
                     }
+                    
                     userStates.set(sender, { step: 'admin_menu' });
-                    let msgResultado = `📋 *IMPORTACAO CONCLUIDA*\n\n✅ Adicionadas: ${adicionadasCount}\n❌ Removidas (problemas): ${resultado.removidas.length}\n⚠️ Erros: ${resultado.erros.length}\n\n`;
-                    if (resultado.removidas.length > 0) {
-                        msgResultado += `*Removidas:*\n`;
-                        resultado.removidas.slice(0, 5).forEach(r => { msgResultado += `• ${r.jogo} - ${r.motivo}\n`; });
+                    
+                    let msgResultado = `📋 *IMPORTACAO CONCLUIDA*\n\n`;
+                    msgResultado += `✅ Adicionadas: ${adicionadasCount}\n`;
+                    msgResultado += `❌ Removidas (problemas): ${resultado.removidas.length}\n`;
+                    msgResultado += `⚠️ Erros: ${resultado.erros.length}\n\n`;
+                    
+                    if (resultado.adicionadas.length > 0) {
+                        msgResultado += `*Exemplos adicionados:*\n`;
+                        resultado.adicionadas.slice(0, 3).forEach(c => {
+                            msgResultado += `• ${c.jogo.substring(0, 25)} - ${c.login.substring(0, 15)}...\n`;
+                        });
                     }
+                    
+                    if (resultado.erros.length > 0 && resultado.erros.length < 10) {
+                        msgResultado += `\n*Erros encontrados:*\n`;
+                        resultado.erros.slice(0, 5).forEach(e => {
+                            msgResultado += `• ${e.substring(0, 40)}\n`;
+                        });
+                    }
+                    
                     await enviarResposta(sender, { text: msgResultado });
                 }
                 
@@ -1078,26 +1270,47 @@ async function connectToWhatsApp() {
                 // ========== DOCUMENTO RECEBIDO ==========
                 if (msg.message.documentMessage && isAdmin && userState.step === 'admin_importar_parser') {
                     try {
+                        console.log('📥 Baixando arquivo...');
                         const buffer = await sock.downloadMediaMessage(msg);
                         const conteudo = buffer.toString('utf8');
+                        
+                        console.log(`📄 Arquivo recebido: ${conteudo.length} caracteres`);
+                        console.log('📄 Primeiras linhas:', conteudo.split('\n').slice(0, 3));
+                        
                         const parser = new ContasSteamParser();
                         const resultado = parser.processarMultiplasContas(conteudo);
+                        
                         let adicionadasCount = 0;
                         for (const conta of resultado.adicionadas) {
                             const r = db.adicionarConta(conta);
                             if (r.sucesso) adicionadasCount++;
                         }
+                        
                         userStates.set(sender, { step: 'admin_menu' });
-                        await enviarResposta(sender, { text: `📄 *ARQUIVO IMPORTADO!*\n\n✅ Adicionadas: ${adicionadasCount}\n❌ Removidas: ${resultado.removidas.length}\n⚠️ Erros: ${resultado.erros.length}` });
+                        
+                        let msgResultado = `📄 *ARQUIVO IMPORTADO!*\n\n`;
+                        msgResultado += `✅ Adicionadas: ${adicionadasCount}\n`;
+                        msgResultado += `❌ Removidas: ${resultado.removidas.length}\n`;
+                        msgResultado += `⚠️ Erros: ${resultado.erros.length}\n\n`;
+                        
+                        if (resultado.adicionadas.length > 0) {
+                            msgResultado += `*Primeiras contas:*\n`;
+                            resultado.adicionadas.slice(0, 3).forEach(c => {
+                                msgResultado += `• ${c.jogo.substring(0, 20)}...\n`;
+                            });
+                        }
+                        
+                        await enviarResposta(sender, { text: msgResultado });
                     } catch (e) {
-                        await enviarResposta(sender, { text: '❌ Erro ao processar arquivo!' });
+                        console.error('❌ Erro ao processar arquivo:', e);
+                        await enviarResposta(sender, { text: '❌ Erro ao processar arquivo!\n\nErro: ' + e.message });
                     }
                 }
                 
             } catch (error) {
                 console.error('❌ Erro:', error);
                 try {
-                    await esperarDelay();
+                    await antiBanDelay(sock, sender);
                     await sock.sendMessage(sender, { text: '❌ *Ocorreu um erro!*\n\nTente novamente ou digite *menu*.' });
                 } catch (e) {}
             }
@@ -1116,7 +1329,7 @@ async function connectToWhatsApp() {
 // ==========================================
 console.log('╔════════════════════════════════════════╗');
 console.log('║         🎮 NYUX STORE BOT              ║');
-console.log('║         Delay Humano: 5-15s            ║');
+console.log('║     Anti-Ban: 0.8-2.2s + Digitando     ║');
 console.log('╚════════════════════════════════════════╝\n');
 
 connectToWhatsApp();
